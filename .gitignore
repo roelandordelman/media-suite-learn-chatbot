@@ -1,0 +1,20 @@
+# Knowledge base (regenerate via ingest script)
+ingest/mediasuite_knowledge_base.json
+
+# Vector index (regenerate via build_index.py)
+embed/chroma_db/
+embed/*.index
+embed/*.pkl
+
+# Environment / secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
