@@ -1,0 +1,10 @@
+# Ingestion
+python-frontmatter
+
+# Embeddings & vector store
+ollama
+chromadb
+
+# API
+fastapi
+uvicorn[standard]
