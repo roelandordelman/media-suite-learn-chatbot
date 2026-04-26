@@ -1,10 +1,5 @@
-# Knowledge base (regenerate via ingest script)
-ingest/mediasuite_knowledge_base.json
-
-# Vector index (regenerate via build_index.py)
-embed/chroma_db/
-embed/*.index
-embed/*.pkl
+# Knowledge base artifacts (live in mediasuite-knowledge-base repo)
+export_to_knowledge_base/stores/
 
 # Environment / secrets
 .env
