@@ -1,17 +1,17 @@
 """
 Show expanded queries and top-k retrieved chunks for a question.
+Useful for diagnosing retrieval quality without invoking the full LLM answer.
 
 Usage:
-    python3 embed/query_debug.py "your question here"
-    python3 embed/query_debug.py "your question here" --top-k 10
+    python3 query_debug.py "your question here"
+    python3 query_debug.py "your question here" --top-k 10
 """
 
 import argparse
 import sys
 from pathlib import Path
 
-# Allow importing from api/ without installing the package
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 
 from api.rag import _expand_query, _retrieve, _get_collection
 

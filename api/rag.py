@@ -6,19 +6,21 @@ retrieval, so vocabulary mismatches (e.g. "work with" vs "access") don't cause
 relevant chunks to be missed.
 """
 
+import json
 from pathlib import Path
 
 import ollama
 import chromadb
+import yaml
 
-CHROMA_DIR = Path(__file__).parent.parent / "embed" / "chroma_db"
-COLLECTION_NAME = "mediasuite"
+CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
+
 EMBED_MODEL = "nomic-embed-text"
 GENERATE_MODEL = "mistral"
 TOP_K = 5
 
 # Chunks with L2 distance above this are considered too dissimilar to be useful.
-# Lower = stricter. Run embed/query_debug.py to see typical scores for your queries
+# Lower = stricter. Run query_debug.py to see typical scores for your queries
 # and tune this value accordingly.
 MAX_DISTANCE = 1.0
 
@@ -42,10 +44,25 @@ Output only the 3 phrasings, one per line, no numbering or explanation.
 
 Question: {question}"""
 
+# JSON-encoded list fields that ChromaDB stores as strings
+_JSON_FIELDS = ("tags", "categories", "tools_mentioned", "collections_mentioned")
+
+
+def _load_config() -> dict:
+    return yaml.safe_load(CONFIG_PATH.read_text())["knowledge_base"]
+
+
+def _decode_meta(meta: dict) -> dict:
+    for field in _JSON_FIELDS:
+        if field in meta:
+            meta[field] = json.loads(meta[field])
+    return meta
+
 
 def _get_collection() -> chromadb.Collection:
-    client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-    return client.get_collection(COLLECTION_NAME)
+    cfg = _load_config()
+    client = chromadb.HttpClient(host=cfg["chroma_host"], port=cfg["chroma_port"])
+    return client.get_collection(cfg["collection_name"])
 
 
 def _expand_query(question: str) -> list[str]:
@@ -80,6 +97,7 @@ def _retrieve(queries: list[str], collection: chromadb.Collection, top_k: int) -
             results["metadatas"][0],
             results["distances"][0],
         ):
+            meta = _decode_meta(meta)
             chunk_id = meta["url"] + "|" + meta["section"]
             if chunk_id not in best or dist < best[chunk_id][2]:
                 best[chunk_id] = (doc, meta, dist)

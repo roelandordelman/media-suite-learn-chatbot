@@ -1,5 +1,5 @@
-# Ingestion
-python-frontmatter
+# Config
+pyyaml
 
 # Embeddings & vector store
 ollama
