@@ -48,7 +48,8 @@ Given a researcher's question, select the best pre-written SPARQL query
 (or queries) and fill in the required parameters.
 
 Available queries:
-  all_tools           No params. Returns all Media Suite component tools.
+  all_tools           No params. Returns all Media Suite component tools with activities.
+  tools_with_status   No params. Returns all tools including experimental/unreleased status flags.
   tools_by_activity   Param: activity_uri. Returns tools supporting that TaDiRaH activity.
   all_workflows       No params. Returns all research workflows with status.
   workflows_by_tool   Param: tool_uri. Returns workflows that use the tool as an instrument.
@@ -220,6 +221,7 @@ def retrieve_by_entity_uris(
 def _format_rows(query_name: str, rows: list[dict], params: dict) -> str:
     formatters = {
         "all_tools":            _fmt_all_tools,
+        "tools_with_status":    _fmt_tools_with_status,
         "tools_by_activity":    _fmt_tools_by_activity,
         "all_workflows":        _fmt_all_workflows,
         "workflows_by_tool":    _fmt_workflows_by_tool,
@@ -256,6 +258,21 @@ def _fmt_all_tools(rows, params):
             line += f": {info['description']}"
         if info["activities"]:
             line += f" (activities: {', '.join(sorted(set(info['activities'])))})"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _fmt_tools_with_status(rows, params):
+    lines = ["# Media Suite tools with status"]
+    for r in rows:
+        label = r.get("label", "")
+        desc = r.get("description", "")
+        status = r.get("status", "")
+        line = f"- {label}"
+        if status:
+            line += f" [{status}]"
+        if desc:
+            line += f": {desc}"
         lines.append(line)
     return "\n".join(lines)
 
@@ -377,14 +394,28 @@ def _fmt_entity_description(rows, params):
 
 
 def _fmt_services_by_tool(rows, params):
-    lines = ["# Backend services by tool"]
+    # Coalesce rows with same serviceUri: one service may have multiple altLabels
+    # (e.g. "Visual Similarity Service" + altLabel "VisXP")
+    services: dict = {}  # serviceUri → {toolLabel, labels: set, desc}
     for r in rows:
-        tool = r.get("toolLabel", "")
-        svc = r.get("serviceLabel", "")
-        desc = r.get("serviceDesc", "")
-        line = f"- {tool} → {svc}"
-        if desc:
-            line += f": {desc[:200]}"
+        uri = r.get("serviceUri", r.get("serviceLabel", ""))
+        if uri not in services:
+            services[uri] = {
+                "tool": r.get("toolLabel", ""),
+                "labels": set(),
+                "desc": r.get("serviceDesc", ""),
+            }
+        services[uri]["labels"].add(r.get("serviceLabel", ""))
+        alt = r.get("altLabel", "")
+        if alt:
+            services[uri]["labels"].add(alt)
+
+    lines = ["# Backend services by tool"]
+    for info in services.values():
+        combined_name = " / ".join(sorted(info["labels"]))
+        line = f"- {info['tool']} → {combined_name}"
+        if info["desc"]:
+            line += f": {info['desc'][:200]}"
         lines.append(line)
     return "\n".join(lines)
 
