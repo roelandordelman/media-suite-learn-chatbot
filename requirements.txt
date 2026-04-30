@@ -5,6 +5,10 @@ pyyaml
 ollama
 chromadb
 
+# HTTP (SPARQL queries to Fuseki)
+requests
+
 # API
 fastapi
 uvicorn[standard]
+aiofiles

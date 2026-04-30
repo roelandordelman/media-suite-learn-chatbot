@@ -1,0 +1,108 @@
+# Retrieval evaluation questions
+#
+# Each entry has:
+#   question:      what a researcher would actually type
+#   expected_urls: list of acceptable source URLs — PASS if any appears in top-k
+#   notes:         optional — why this question is useful as a test case
+#
+# Add new questions here as the knowledge base grows.
+# Run: python evaluate/eval_retrieval.py
+
+questions:
+  - question: "What kind of search operators can I use in the Media Suite?"
+    expected_urls:
+      - https://mediasuite.clariah.nl/documentation/howtos/search
+    notes: Core search how-to
+
+  - question: "How do I inspect collection metadata in the Media Suite?"
+    expected_urls:
+      - https://mediasuite.clariah.nl/documentation/howtos/inspect-collections
+      - https://mediasuite.clariah.nl/labo/documentation/collection-inspector
+    notes: Inspect tool — both pages acceptable. UI name "Collection Inspector" is a known harder variant that fails due to vocabulary mismatch (docs say "Inspect tool"); fix requires enriching chunk prefixes with UI tool names.
+
+  - question: "How do I create an annotation?"
+    expected_urls:
+      - https://mediasuite.clariah.nl/documentation/howtos/annotate
+      - https://mediasuite.clariah.nl/learn/tool-tutorials/tutorial-sharing-media-suite-annotations-following-the-fair-principles
+      - https://mediasuite.clariah.nl/learn/subject-tutorials/tutorial-sharing-media-suite-annotations-following-the-fair-principles
+      - https://mediasuite.clariah.nl/learn/subject-tutorials/tutorial-segmenting-and-annotating-sesamstraat
+      - https://mediasuite.clariah.nl/learn/tool-tutorials/tutorial-segmenting-and-annotating-sesamstraat
+    notes: How-to or any annotation tutorial acceptable. How-to ranks below tutorials for this query — known retrieval gap.
+
+  - question: "What kind of data is available in the Media Suite?"
+    expected_urls:
+      - https://mediasuite.clariah.nl/documentation/faq/what-data
+    notes: Should pull overview / help content about available datasets
+
+  - question: "How do I save items to my user project?"
+    expected_urls:
+      - https://mediasuite.clariah.nl/documentation/howtos/bookmark
+    notes: Workspace / bookmarking
+
+  - question: "How do I compare search queries in the Media Suite?"
+    expected_urls:
+      - https://mediasuite.clariah.nl/labo/documentation/query-comparison
+      - https://mediasuite.clariah.nl/documentation/howtos/compare-queries
+    notes: Compare tool — both pages acceptable. "Can I compare two time periods?" is a known harder variant that ranks targets at #11/#17 due to "time periods" vs doc vocabulary "date intervals"; fix requires query expansion in the chatbot.
+
+  - question: "What is automatic speech recognition in the Media Suite?"
+    expected_urls:
+      - https://mediasuite.clariah.nl/learn/tool-tutorials/tutorial-searching-and-analysing-automatic-speech-recognition-asr-transcripts-as-data-layer-in-television-collections
+      - https://mediasuite.clariah.nl/learn/tool-tutorials/tutorial-searching-and-analysing-the-sound-and-vision-radio-collection-using-automatic-speech-recognition
+    notes: ASR / Speech Recognition feature — two tutorials are acceptable sources
+
+  # ── Structural questions (router path: SPARQL → entity_uri filter → ChromaDB) ──
+  # Skipped by eval_retrieval.py (no single URL to check).
+  # Tested end-to-end by evaluate/eval_router.py which calls answer() and scores
+  # against expected_answer. Vector search alone cannot reliably answer these:
+  # they require enumeration, ordered traversal, or structured property filtering.
+
+  - question: "What tools does the Media Suite have?"
+    category: structural
+    expected_answer: "Search Tool, Collection Inspector, Explore Tool, Compare Tool, Resource Viewer, Annotation Tool, Workspace, Statistical Analysis Tool, Similarity Tool, FactRank Tool, Reflexivity Tool, Fragment Cutter"
+    notes: "SPARQL: all_tools. Vector search returns top-k similar chunks — not a complete enumeration."
+
+  - question: "Which collections can I access without logging in?"
+    category: structural
+    expected_answer: "Open Beelden (CC0), Open Beelden Natuurbeelden (CC0), Radio Oranje (Public Domain), DANS Oral History Archive (open), Tweede Kamer Archive (public)"
+    notes: "SPARQL: open_collections filtering by euright:PUBLIC."
+
+  - question: "Which tools support annotation?"
+    category: structural
+    expected_answer: "Annotation Tool (visual and audio annotation, segmenting), Resource Viewer (annotation via timeline), Fragment Cutter (planned — segmenting)"
+    notes: "SPARQL: tools_by_activity for tadirah:visualAnnotation and tadirah:audioAnnotation."
+
+  - question: "What are the steps of the SANE workflow in order?"
+    category: structural
+    expected_answer: "1. Search and sample corpus in Media Suite (Search Tool). 2. Export selection for SANE (Workspace). 3. Analyse in SANE. 4. Deposit and cite research output (optional)."
+    notes: "SPARQL: workflow_steps for ms:RestrictedDataSANEWorkflow."
+
+  - question: "Which workflows are not yet possible in the Media Suite?"
+    category: structural
+    expected_answer: "Fragment citation via IIIF, Oral history ASR and Media Suite ingestion, Replication and provenance tracing, Researcher-triggered enrichment on demand"
+    notes: "SPARQL: all_workflows filtered by clariah:workflowStatus 'Aspirational'."
+
+  - question: "Which tools are experimental or not yet released?"
+    category: structural
+    expected_answer: "Similarity Tool (experimental — limited archive coverage), FactRank Tool (experimental — limited to Dutch talk shows), Fragment Cutter (planned — not yet available), Explore Tool (outdated — revamp in progress)"
+    notes: "SPARQL: ComponentTools with schema:releaseNotes."
+
+  - question: "What backend service powers the Similarity Tool?"
+    category: structural
+    expected_answer: "The Visual Similarity Service (VisXP) — extracts visual keyframe embeddings from video for similarity-based retrieval."
+    notes: "SPARQL: services_by_tool via clariah:deploysService."
+
+  - question: "Which workflows use the Search Tool?"
+    category: structural
+    expected_answer: "Cross-collection comparative analysis, Gender representation analysis, Quantitative analysis on-premise, Quantitative analysis via SANE, Research using ASR transcripts, Search annotate and export"
+    notes: "SPARQL: workflows_by_tool for ms:SearchTool."
+
+  - question: "Can I use Radio Oranje data commercially?"
+    category: structural
+    expected_answer: "Yes — Radio Oranje is in the Public Domain (Public Domain Mark 1.0), so there are no reuse restrictions."
+    notes: "SPARQL: entity_description or collections_by_access for ms:RadioOranje."
+
+  - question: "Is fragment citation currently supported in the Media Suite?"
+    category: structural
+    expected_answer: "No — the Fragment Cutter tool is planned but not yet available. Fragment citation via IIIF is aspirational."
+    notes: "SPARQL: schema:releaseNotes on ms:FragmentCutter + clariah:workflowStatus on ms:FragmentCitationSubWorkflow."

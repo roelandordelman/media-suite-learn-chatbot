@@ -1,5 +1,8 @@
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from api.rag import answer
@@ -12,6 +15,8 @@ app.add_middleware(
     allow_methods=["POST"],
     allow_headers=["*"],
 )
+
+app.mount("/widget", StaticFiles(directory=Path(__file__).parent.parent / "widget"), name="widget")
 
 
 class Message(BaseModel):

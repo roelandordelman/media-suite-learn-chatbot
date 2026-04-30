@@ -1,4 +1,97 @@
 knowledge_base:
   collection_name: mediasuite
   chroma_host: localhost
-  chroma_port: 8000
+  chroma_port: 8001
+
+knowledge_graph:
+  fuseki_url: http://localhost:3030
+  dataset: mediasuite
+  named_graph: https://mediasuite.clariah.nl/graph
+  admin_user: admin
+  admin_password: admin
+
+  # Tool name → entity URI + TaDiRaH activities.
+  # Sourced from mediasuite-knowledge-base/config.yaml (tool_entities).
+  # Keep in sync when the knowledge base adds or renames tools.
+  tool_entities:
+    "Search Tool":
+      entity_uri: "https://mediasuite.clariah.nl/vocab#SearchTool"
+      tadirah_activities:
+        - "https://vocabs.dariah.eu/tadirah/searching"
+        - "https://vocabs.dariah.eu/tadirah/querying"
+        - "https://vocabs.dariah.eu/tadirah/dataVisualization"
+    "Collection Inspector":
+      entity_uri: "https://mediasuite.clariah.nl/vocab#CollectionInspector"
+      tadirah_activities:
+        - "https://vocabs.dariah.eu/tadirah/browsing"
+        - "https://vocabs.dariah.eu/tadirah/exploration"
+        - "https://vocabs.dariah.eu/tadirah/dataVisualization"
+        - "https://vocabs.dariah.eu/tadirah/qualityAssurance"
+    "Explore Tool":
+      entity_uri: "https://mediasuite.clariah.nl/vocab#ExploreTool"
+      tadirah_activities:
+        - "https://vocabs.dariah.eu/tadirah/browsing"
+        - "https://vocabs.dariah.eu/tadirah/exploration"
+        - "https://vocabs.dariah.eu/tadirah/linkedOpenData"
+    "Compare Tool":
+      entity_uri: "https://mediasuite.clariah.nl/vocab#CompareTool"
+      tadirah_activities:
+        - "https://vocabs.dariah.eu/tadirah/comparing"
+        - "https://vocabs.dariah.eu/tadirah/dataVisualization"
+    "Resource Viewer":
+      entity_uri: "https://mediasuite.clariah.nl/vocab#ResourceViewer"
+      tadirah_activities:
+        - "https://vocabs.dariah.eu/tadirah/browsing"
+        - "https://vocabs.dariah.eu/tadirah/segmenting"
+        - "https://vocabs.dariah.eu/tadirah/visualAnnotation"
+        - "https://vocabs.dariah.eu/tadirah/audioAnnotation"
+    "Annotation Tool":
+      entity_uri: "https://mediasuite.clariah.nl/vocab#AnnotationTool"
+      tadirah_activities:
+        - "https://vocabs.dariah.eu/tadirah/visualAnnotation"
+        - "https://vocabs.dariah.eu/tadirah/audioAnnotation"
+        - "https://vocabs.dariah.eu/tadirah/segmenting"
+    "Workspace":
+      entity_uri: "https://mediasuite.clariah.nl/vocab#Workspace"
+      tadirah_activities:
+        - "https://vocabs.dariah.eu/tadirah/collecting"
+        - "https://vocabs.dariah.eu/tadirah/managing"
+    "Statistical Analysis":
+      entity_uri: "https://mediasuite.clariah.nl/vocab#StatisticalAnalysis"
+      tadirah_activities:
+        - "https://vocabs.dariah.eu/tadirah/dataVisualization"
+        - "https://vocabs.dariah.eu/tadirah/dataMining"
+    "Fragment Cutter":
+      entity_uri: "https://mediasuite.clariah.nl/vocab#FragmentCutter"
+      tadirah_activities:
+        - "https://vocabs.dariah.eu/tadirah/segmenting"
+        - "https://vocabs.dariah.eu/tadirah/videoEditing"
+    "Similarity Tool":
+      entity_uri: "https://mediasuite.clariah.nl/vocab#SimilarityTool"
+      tadirah_activities:
+        - "https://vocabs.dariah.eu/tadirah/patternRecognition"
+        - "https://vocabs.dariah.eu/tadirah/informationRetrieval"
+    "FactRank Tool":
+      entity_uri: "https://mediasuite.clariah.nl/vocab#FactRankTool"
+      tadirah_activities:
+        - "https://vocabs.dariah.eu/tadirah/informationRetrieval"
+        - "https://vocabs.dariah.eu/tadirah/discourseAnalysis"
+    "Reflexivity Tool":
+      entity_uri: "https://mediasuite.clariah.nl/vocab#ReflexivityTool"
+      tadirah_activities:
+        - "https://vocabs.dariah.eu/tadirah/defining"
+
+  # Collection name → entity URI.
+  # Sourced from mediasuite-knowledge-base/config.yaml (graph.collection_entities).
+  collection_entities:
+    "Sound & Vision Archive":            "https://mediasuite.clariah.nl/vocab#NISVArchive"
+    "Sound & Vision Radio Archive":      "https://mediasuite.clariah.nl/vocab#SoundVisionRadioArchive"
+    "Sound & Vision Television Archive": "https://mediasuite.clariah.nl/vocab#SoundVisionTelevisionArchive"
+    "DANS Oral History Archive":         "https://mediasuite.clariah.nl/vocab#DANSOralHistory"
+    "Radio Oranje":                      "https://mediasuite.clariah.nl/vocab#RadioOranje"
+    "Open Beelden":                      "https://mediasuite.clariah.nl/vocab#OpenBeelden"
+    "KB Newspaper Collection":           "https://mediasuite.clariah.nl/vocab#KBNewspapers"
+    "EYE Film Collection":               "https://mediasuite.clariah.nl/vocab#EYEFilmCollection"
+    "Tweede Kamer Archive":              "https://mediasuite.clariah.nl/vocab#TweedeKamerArchive"
+    "Meertens Soundbites Collection":    "https://mediasuite.clariah.nl/vocab#MeertensDialectDB"
+    "Amateur Film Collection":           "https://mediasuite.clariah.nl/vocab#AmateurFilmCollection"
