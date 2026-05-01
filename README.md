@@ -4,7 +4,7 @@ A RAG chatbot for researchers using the [CLARIAH Media Suite](https://mediasuite
 
 The widget is intended to be embedded on the [Media Suite Community site](https://roelandordelman.github.io/media-suite-community/).
 
-## Workflow
+## Architecture
 
 The chatbot routes questions to one of two retrieval paths depending on question type.
 
@@ -16,36 +16,68 @@ flowchart TD
     end
 
     subgraph Chatbot["media-suite-learn-chatbot (this repo)"]
-        D[User question] --> CLS[Classify\nmistral]
+        D[User question] --> NP & SP
 
-        CLS -->|narrative\nhow do I...?| NP[Query expansion\n3 phrasings · mistral]
-        NP --> EMB[Embed queries\nnomic-embed-text]
-        EMB -->|vector search| B
-        B -->|top-5 chunks| GEN
+        subgraph NP["Narrative path"]
+            N1[Query expansion\n3 phrasings · LLM] --> N2[Embed queries\nnomic-embed-text]
+            N2 -->|vector search| B
+            B -->|top-k chunks| N3[Chunk context]
+        end
 
-        CLS -->|structural\nwhat tools exist for...?| SP[Select SPARQL query\nmistral picks from 10 templates]
-        SP -->|named query + entity URIs| KG
-        KG -->|structured facts| FMT[Format as\nknowledge graph context]
-        FMT -->|entity URIs| B
-        B -->|supporting chunks| GEN
+        subgraph SP["Structural path"]
+            S1[Embed question\nnomic-embed-text] -->|cosine similarity\nagainst trigger questions| S2[Select SPARQL\nquery/queries]
+            S2 -->|named query + entity URIs| KG
+            KG -->|structured facts| S3[KG context]
+        end
 
-        GEN[Generate answer\nmistral] --> ANS[Answer + source URLs]
+        N3 & S3 --> GEN[Generate answer\nLLM]
+        GEN --> ANS[Answer + source URLs]
         ANS --> W[JS widget\nchatbot.js]
     end
 
     W -->|embedded via script tag| J[Media Suite\nCommunity site]
 ```
 
+Both paths run in parallel for every question. The LLM is used only for query expansion and answer generation — not for routing decisions.
+
 ## Stack
 
 | Layer | Technology |
 |---|---|
-| Generation, query expansion, classification | mistral via Ollama (local) |
+| Generation, query expansion | llama3.1:8b via Ollama (local) |
 | Embeddings | nomic-embed-text via Ollama (local) |
 | Vector store | ChromaDB HTTP server — built in mediasuite-knowledge-base |
 | Knowledge graph | Apache Jena Fuseki — built in mediasuite-knowledge-base |
 | Backend | FastAPI + uvicorn |
 | Frontend | Vanilla JS widget, no framework |
+
+## Design decisions
+
+### Why a named-query catalogue instead of LLM-generated SPARQL
+
+The structural path does not ask the LLM to write SPARQL. Instead it maintains a catalogue of pre-written, tested query templates (`api/sparql_queries.py`) and routes incoming questions to the right template.
+
+**Why not generate SPARQL from natural language?**
+
+Writing valid SPARQL requires knowing two things:
+- *Schema*: the exact vocabulary in use (`clariah:ComponentTool`, `tadirah:audioAnnotation`, `schema:releaseNotes`, …). LLMs hallucinate property names they haven't seen.
+- *Content*: which fields are actually populated in the graph. A syntactically valid query can return zero rows because it references a property that only some entities have. The named queries are written and tested against the actual data, so their return shape is known.
+
+**The set-of-variants insight**
+
+One named query covers an entire *class* of natural language questions. `tools_by_activity` answers "what tools support searching?", "what tools support annotation?", "what tools support data visualisation?" — all phrasings map to the same template, just with a different URI parameter. This is the key leverage: a small, well-tested catalogue covers a large question space without requiring a model that can reliably generate arbitrary SPARQL.
+
+**Routing as a matching problem, not a generation problem**
+
+Selecting the right named query is a *matching* problem (which of these 10 templates fits the question?), not a generation problem (write valid SPARQL from scratch). Matching is solved with embedding similarity — embed the question, compare against pre-written trigger questions for each template, pick the closest. This is deterministic and does not degrade with model quality.
+
+Early versions of this chatbot used an LLM to both classify questions (structural vs narrative) and select SPARQL queries. This was non-deterministic: the same question could route differently between runs, and the LLM sometimes hallucinated unresolvable template variables. Replacing LLM routing with embedding similarity is the planned improvement (see [Planned improvements](#planned-improvements)).
+
+### Why two parallel paths
+
+Early versions classified each question as either structural or narrative before retrieval. Classification added latency and a failure mode: questions classified as narrative never reached the graph, even when the graph held the authoritative answer.
+
+Running both paths in parallel removes this failure mode. The LLM generates an answer from whatever context both paths returned — structured facts from the graph and/or text chunks from ChromaDB. If the structural path returns nothing relevant (the query catalogue has no match above threshold), only the narrative context is used, and vice versa.
 
 ## Prerequisites
 
@@ -68,7 +100,7 @@ pip install -r requirements.txt
 Download from [ollama.com/download](https://ollama.com/download), then:
 ```bash
 ollama pull nomic-embed-text
-ollama pull mistral
+ollama pull llama3.1:8b
 ```
 
 **3. Configure connections**
@@ -114,15 +146,15 @@ curl -s -X POST http://localhost:8000/ask \
 ```
 api/
   main.py            — FastAPI app (POST /ask, conversation history)
-  rag.py             — RAG pipeline: classify → retrieve → generate
-  router.py          — Retrieval router: classify + SPARQL selection + result formatting
-  sparql_queries.py  — Named SPARQL query library (10 templates) + run_query()
+  rag.py             — RAG pipeline: expand → retrieve → generate (both paths)
+  router.py          — Structural path: SPARQL query selection + result formatting
+  sparql_queries.py  — Named SPARQL query catalogue (10 templates) + run_query()
 widget/              — Embeddable chat widget
 evaluate/
-  test_questions.yaml    — Narrative + structural eval questions
-  eval_retrieval.py      — Narrative retrieval eval (URL presence in top-5)
-  eval_router.py         — Structural answer eval (key term scoring)
-config.yaml          — ChromaDB + Fuseki config + entity/tool mappings
+  test_questions.yaml    — Eval questions (narrative + structural, annotated + pending)
+  eval_retrieval.py      — Narrative retrieval eval (URL presence in top-k)
+  eval_router.py         — Structural answer eval (key term scoring, debug mode)
+config.yaml          — ChromaDB + Fuseki config + entity/tool/collection mappings
 debug_rag.py         — Full pipeline debug CLI
 query_debug.py       — Retrieval-only debug CLI
 ```
@@ -130,14 +162,18 @@ query_debug.py       — Retrieval-only debug CLI
 ## Evaluation
 
 ```bash
-python evaluate/eval_retrieval.py           # narrative questions: 7/7 (100%)
-python evaluate/eval_router.py              # structural questions
-python evaluate/eval_router.py --verbose    # show full answers on failure
+python evaluate/eval_retrieval.py              # narrative questions: URL presence in top-k
+python evaluate/eval_retrieval.py --verbose    # show retrieved vs expected URLs on failure
+python evaluate/eval_router.py                 # structural questions: key term scoring
+python evaluate/eval_router.py --debug         # show route, SPARQL queries, context per question
+python evaluate/eval_router.py --verbose       # show full answers and missing terms on failure
 ```
 
-**Narrative retrieval** (7 questions): consistently 7/7. Checks whether any expected URL appears in the top-5 retrieved chunks.
+**Narrative retrieval** (7 annotated questions): consistently 7/7. Checks whether any expected URL appears in the top-k retrieved chunks.
 
-**Structural routing** (10 questions): ~3–5/10 with mistral 7B. Checks whether key entities from the expected answer appear in the generated text.
+**Structural routing** (10 annotated questions): 7–9/10 depending on run (model non-determinism). Checks whether key entity names from the expected answer appear in the generated text. The `--debug` flag shows per-question what route was taken, which SPARQL queries were selected, and what context was built — useful for diagnosing failures.
+
+Questions marked `annotated: false` in `test_questions.yaml` are shown as `[PENDING]` with the chatbot's actual output, making it easy to review and annotate them.
 
 ## Debugging
 
@@ -151,8 +187,31 @@ python3 query_debug.py "your question here" --top-k 10
 
 `query_debug.py` shows retrieved chunks with similarity scores and source URLs — useful for diagnosing why a question isn't finding the right content.
 
+## Planned improvements
+
+**Embedding-based SPARQL routing** (replaces current LLM-based routing)
+
+The current implementation still uses an LLM to select named queries and fill URI parameters. This is non-deterministic: the same question routes differently between runs. The planned replacement:
+
+1. For each named query, define a set of trigger questions that it answers.
+2. At query time, embed the user question with nomic-embed-text and compute cosine similarity against all trigger questions.
+3. Run queries whose best trigger similarity exceeds a threshold — no LLM call needed.
+4. For parametric queries, fill URI parameters by embedding similarity against known entity names from `config.yaml` (tool names, workflow names, collection names, tadirah activity labels).
+
+This makes routing fully deterministic and removes all LLM dependency from the retrieval decision.
+
+**Expanded query catalogue**
+
+Each new named query covers an entire class of natural language questions. Candidates for addition:
+- `collections_by_license_type` — filter by CC0 / CC-BY / Public Domain specifically
+- `restricted_collections` — collections requiring institutional login
+- `workflows_by_status` — filter by Fully supported / Aspirational / Partially supported
+- `tools_for_workflow` — inverse of `workflows_by_tool`
+
 ## Known limitations
 
-**SPARQL generation with mistral 7B**: the structural path uses mistral to select a named query template from a pre-written library (`api/sparql_queries.py`). This is far more reliable than generating SPARQL from scratch, but mistral is inconsistent — it sometimes ignores the SPARQL context when generating the final answer, particularly for complex structural questions. A better model (llama3, GPT-4o, Claude) would significantly improve structural answer quality without any code changes.
+**Model non-determinism**: the structural path currently uses an LLM to select SPARQL query templates. The same question can route differently between runs. The planned embedding-based routing (see above) eliminates this.
 
-**Vocabulary mismatch**: questions using acronyms ("SANE") or branded names ("VisXP") embed differently from the documentation vocabulary. The descriptive form ("secure analysis environment for sensitive audiovisual data") retrieves correctly where the acronym fails. Query expansion mitigates this for narrative questions.
+**Vocabulary mismatch**: questions using acronyms ("SANE") or branded names ("VisXP") embed differently from the documentation vocabulary. Query expansion mitigates this for the narrative path.
+
+**Query catalogue coverage**: the structural path can only answer questions that map to one of the named queries. Questions about graph relationships not covered by the catalogue fall back to vector search.
