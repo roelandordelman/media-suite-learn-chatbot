@@ -16,7 +16,7 @@ import yaml
 CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
 
 EMBED_MODEL = "nomic-embed-text"
-GENERATE_MODEL = "mistral"
+GENERATE_MODEL = "llama3.1:8b"
 TOP_K = 5
 
 # Chunks with L2 distance above this are considered too dissimilar to be useful.
@@ -173,8 +173,11 @@ def _retrieve(queries: list[str], collection: chromadb.Collection, top_k: int) -
     return docs, metas, dists
 
 
-def answer(question: str, history: list[dict] = None, top_k: int = TOP_K) -> dict:
-    """Return {"answer": str, "sources": [{"title": str, "url": str}]}"""
+def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug: bool = False) -> dict:
+    """
+    Return {"answer": str, "sources": [{"title": str, "url": str}]}.
+    When debug=True, also include "_debug": {"route", "sparql_queries", "sparql_context", "entity_uris"}.
+    """
     from api.router import classify_question, sparql_query_structural, retrieve_by_entity_uris
 
     _, kg_cfg = _load_config()
@@ -186,10 +189,12 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K) -> dic
         route = classify_question(question, GENERATE_MODEL)
 
     sparql_context = ""
+    sparql_selections = []
+    entity_uris = []
     docs, metas, distances = [], [], []
 
     if route == "structural" and kg_enabled:
-        sparql_context, entity_uris = sparql_query_structural(question, kg_cfg, GENERATE_MODEL)
+        sparql_context, entity_uris, sparql_selections = sparql_query_structural(question, kg_cfg, GENERATE_MODEL)
         if entity_uris:
             docs, metas, distances = retrieve_by_entity_uris(
                 question, entity_uris, collection, EMBED_MODEL, top_k
@@ -231,7 +236,10 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K) -> dic
 
     # Don't return sources if the LLM couldn't answer from the context
     if "I don't have information about that" in answer_text:
-        return {"answer": answer_text, "sources": []}
+        result = {"answer": answer_text, "sources": []}
+        if debug:
+            result["_debug"] = _build_debug(route, sparql_selections, sparql_context, entity_uris)
+        return result
 
     seen = set()
     unique_sources = []
@@ -240,4 +248,20 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K) -> dic
             seen.add(m["url"])
             unique_sources.append({"title": m["title"], "url": m["url"]})
 
-    return {"answer": answer_text, "sources": unique_sources}
+    result = {"answer": answer_text, "sources": unique_sources}
+    if debug:
+        result["_debug"] = _build_debug(route, sparql_selections, sparql_context, entity_uris)
+    return result
+
+
+def _build_debug(route: str, selections: list, sparql_context: str, entity_uris: list) -> dict:
+    query_labels = [
+        name if not params else f"{name}({', '.join(f'{k}=…{v[-20:]}' for k, v in params.items())})"
+        for name, params in selections
+    ]
+    return {
+        "route": route,
+        "sparql_queries": query_labels,
+        "sparql_context_preview": sparql_context[:400] if sparql_context else "(empty)",
+        "entity_uris": entity_uris,
+    }

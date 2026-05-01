@@ -123,21 +123,23 @@ def classify_question(question: str, model: str) -> str:
 
 def sparql_query_structural(
     question: str, kg_cfg: dict, model: str
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], list[tuple]]:
     """
     Select and run named SPARQL queries for a structural question.
 
-    Returns (sparql_context, entity_uris):
+    Returns (sparql_context, entity_uris, selections):
       sparql_context — formatted text of SPARQL results, used directly as
                        LLM context so the model can enumerate/reason over facts.
       entity_uris    — ms: entity URIs from results, used to fetch supporting
                        ChromaDB chunks for additional narrative detail.
+      selections     — list of (query_name, params) pairs the LLM chose
+                       (populated even if SPARQL returned no rows, for debug).
 
-    Returns ("", []) on failure so the caller falls back to vector search.
+    Returns ("", [], []) on failure so the caller falls back to vector search.
     """
     selections = _select_queries(question, kg_cfg, model)
     if not selections:
-        return "", []
+        return "", [], []
 
     endpoint = _sparql_endpoint(kg_cfg)
     auth = _sparql_auth(kg_cfg)
@@ -164,7 +166,7 @@ def sparql_query_structural(
         except Exception:
             continue
 
-    return "\n\n".join(context_parts), list(entity_uris)
+    return "\n\n".join(context_parts), list(entity_uris), selections
 
 
 def retrieve_by_entity_uris(

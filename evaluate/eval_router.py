@@ -13,7 +13,6 @@ Usage:
 """
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -27,35 +26,20 @@ DEFAULT_QUESTIONS = Path(__file__).parent / "test_questions.yaml"
 DEFAULT_THRESHOLD = 0.5
 
 
-def _key_terms(text: str) -> list[str]:
-    """Extract meaningful terms from expected_answer for matching."""
-    # Split on commas, semicolons, numbered list markers, parentheses
-    parts = re.split(r"[,;()\n]|\d+\.", text)
-    terms = []
-    for part in parts:
-        term = part.strip().strip(".")
-        # Keep terms that are at least 3 chars and not pure stopwords
-        if len(term) >= 3 and term.lower() not in {"the", "and", "for", "via", "not", "yes", "no"}:
-            terms.append(term)
-    return terms
-
-
-def _score(generated: str, expected: str) -> tuple[float, list[str], list[str]]:
+def _score(generated: str, terms: list[str]) -> tuple[float, list[str], list[str]]:
     """
     Return (score, found_terms, missing_terms).
-    Score = fraction of expected key terms found in the generated answer (case-insensitive).
+    Score = fraction of terms found in generated answer (case-insensitive substring match).
     """
-    gen_lower = generated.lower()
-    terms = _key_terms(expected)
     if not terms:
         return 1.0, [], []
-
+    gen_lower = generated.lower()
     found = [t for t in terms if t.lower() in gen_lower]
     missing = [t for t in terms if t.lower() not in gen_lower]
     return len(found) / len(terms), found, missing
 
 
-def evaluate(questions_path: Path, threshold: float, verbose: bool) -> None:
+def evaluate(questions_path: Path, threshold: float, verbose: bool, debug: bool = False) -> None:
     data = yaml.safe_load(questions_path.read_text())
     structural = [
         q for q in data["questions"]
@@ -68,6 +52,7 @@ def evaluate(questions_path: Path, threshold: float, verbose: bool) -> None:
 
     passed = 0
     failed = 0
+    pending = 0
 
     print(f"\nEvaluating {len(structural)} structural questions  (threshold={threshold:.0%})\n")
     print(f"{'─' * 70}")
@@ -77,10 +62,32 @@ def evaluate(questions_path: Path, threshold: float, verbose: bool) -> None:
         expected = entry.get("expected_answer", "")
         notes = entry.get("notes", "")
 
-        result = answer(question)
+        if not entry.get("annotated", True):
+            result = answer(question, debug=debug)
+            generated = result.get("answer", "")
+            print(f"[PENDING] {question}")
+            if notes:
+                print(f"          {notes}")
+            if debug:
+                dbg = result.get("_debug", {})
+                print(f"          Route:          {dbg.get('route', '?')}")
+                print(f"          SPARQL queries: {dbg.get('sparql_queries', []) or '(none)'}")
+            print(f"          Answer: {generated[:300]}{'…' if len(generated) > 300 else ''}")
+            print()
+            pending += 1
+            continue
+
+        result = answer(question, debug=debug)
         generated = result.get("answer", "")
 
-        score, found, missing = _score(generated, expected)
+        # Use explicit expected_terms when present; fall back to splitting expected_answer
+        raw_terms = entry.get("expected_terms")
+        if raw_terms:
+            terms = raw_terms
+        else:
+            terms = [t.strip() for t in expected.split(",") if t.strip()]
+
+        score, found, missing = _score(generated, terms)
         hit = score >= threshold
         status = "PASS" if hit else "FAIL"
 
@@ -94,6 +101,15 @@ def evaluate(questions_path: Path, threshold: float, verbose: bool) -> None:
         if notes:
             print(f"       {notes}")
 
+        if debug:
+            dbg = result.get("_debug", {})
+            print(f"       Route:           {dbg.get('route', '?')}")
+            queries = dbg.get("sparql_queries", [])
+            print(f"       SPARQL queries:  {queries if queries else '(none selected)'}")
+            print(f"       SPARQL context:  {dbg.get('sparql_context_preview', '(empty)')[:200]}")
+            uris = dbg.get("entity_uris", [])
+            print(f"       Entity URIs:     {[u.split('#')[-1] for u in uris] if uris else '(none)'}")
+
         if not hit and verbose:
             print(f"       Expected answer: {expected}")
             print(f"       Missing terms: {missing}")
@@ -104,7 +120,7 @@ def evaluate(questions_path: Path, threshold: float, verbose: bool) -> None:
     total = passed + failed
     overall = passed / total * 100 if total else 0
     print(f"{'─' * 70}")
-    print(f"Result: {passed}/{total} passed  ({overall:.0f}%)\n")
+    print(f"Result: {passed}/{total} passed  ({overall:.0f}%)  |  {pending} pending annotation\n")
 
 
 if __name__ == "__main__":
@@ -114,5 +130,7 @@ if __name__ == "__main__":
                         help="Fraction of expected key terms that must appear (default 0.5)")
     parser.add_argument("--verbose", action="store_true",
                         help="Show full answers and missing terms on failure")
+    parser.add_argument("--debug", action="store_true",
+                        help="Show route, SPARQL queries selected, and context preview for every question")
     args = parser.parse_args()
-    evaluate(args.questions, args.threshold, args.verbose)
+    evaluate(args.questions, args.threshold, args.verbose, args.debug)

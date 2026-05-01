@@ -33,24 +33,38 @@ def evaluate(questions_path: Path, top_k: int, verbose: bool) -> None:
 
     passed = 0
     failed = 0
+    pending = 0
 
-    print(f"\nEvaluating {len(questions)} questions  (top_k={top_k})\n")
+    print(f"\nEvaluating narrative questions  (top_k={top_k})\n")
     print(f"{'─' * 70}")
 
     for entry in questions:
         if entry.get("category") == "structural":
-            continue  # structural questions are evaluated by eval_router.py
+            continue
 
-        question   = entry["question"]
-        expected   = set(entry.get("expected_urls", []))
-        notes      = entry.get("notes", "")
+        question = entry["question"]
+        notes    = entry.get("notes", "")
 
+        if not entry.get("annotated", True) or not entry.get("expected_urls"):
+            queries = _expand_query(question)
+            docs, metas, distances = _retrieve(queries, collection, top_k)
+            retrieved_urls = sorted({m["url"] for m in metas})
+            print(f"[PENDING] {question}")
+            if notes:
+                print(f"          {notes}")
+            print(f"          Retrieved:")
+            for u in retrieved_urls:
+                print(f"            {u}")
+            print()
+            pending += 1
+            continue
+
+        expected = set(entry["expected_urls"])
         queries = _expand_query(question)
         docs, metas, distances = _retrieve(queries, collection, top_k)
         retrieved_urls = {m["url"] for m in metas}
 
         hit = bool(expected & retrieved_urls)
-
         status = "PASS" if hit else "FAIL"
         if hit:
             passed += 1
@@ -74,7 +88,7 @@ def evaluate(questions_path: Path, top_k: int, verbose: bool) -> None:
     total = passed + failed
     score = passed / total * 100 if total else 0
     print(f"{'─' * 70}")
-    print(f"Result: {passed}/{total} passed  ({score:.0f}%)\n")
+    print(f"Result: {passed}/{total} passed  ({score:.0f}%)  |  {pending} pending annotation\n")
 
 
 if __name__ == "__main__":
