@@ -56,6 +56,16 @@ Output only the 3 queries, one per line, no numbering or explanation.
 
 Question: {question}"""
 
+REFORMULATION_PROMPT = """The following question produced poor search results against documentation.
+Rephrase it using different vocabulary, synonyms, or a more specific/general form that might match documentation language better.
+Output only the rephrased question, nothing else.
+
+Original question: {question}"""
+
+# If the best (lowest) narrative L2 distance is above this and the structural path
+# returned nothing, CRAG fires: reformulate the question and retry retrieval once.
+CRAG_RETRIEVAL_THRESHOLD = 0.75
+
 # JSON-encoded list fields that ChromaDB stores as strings
 _JSON_FIELDS = ("tags", "categories", "tools_mentioned", "collections_mentioned")
 
@@ -91,6 +101,22 @@ def _expand_query(question: str) -> list[str]:
     ]
     # Always include the original so it anchors retrieval
     return [question] + alternatives[:3]
+
+
+def _reformulate_query(question: str) -> str | None:
+    """
+    Ask the LLM to rephrase the question with different vocabulary.
+    Returns None if the LLM fails or returns the same question.
+    """
+    try:
+        response = ollama.chat(
+            model=GENERATE_MODEL,
+            messages=[{"role": "user", "content": REFORMULATION_PROMPT.format(question=question)}],
+        )
+        reformulated = response["message"]["content"].strip()
+        return reformulated if reformulated and reformulated.lower() != question.lower() else None
+    except Exception:
+        return None
 
 
 def _deduplicate_by_url(
@@ -202,6 +228,26 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
     queries = _expand_query(question)
     docs, metas, distances = _retrieve(queries, collection, top_k)
 
+    # CRAG: if structural returned nothing and narrative retrieval is weak, reformulate once
+    crag_triggered = False
+    if not sparql_context and (not distances or distances[0] > CRAG_RETRIEVAL_THRESHOLD):
+        reformulated = _reformulate_query(question)
+        if reformulated:
+            crag_triggered = True
+            r_docs, r_metas, r_dists = _retrieve([reformulated], collection, top_k)
+            # Merge: best-scoring chunk per URL wins
+            url_map: dict[str, tuple] = {
+                m["url"]: (d, m, di) for d, m, di in zip(docs, metas, distances)
+            }
+            for d, m, dist in zip(r_docs, r_metas, r_dists):
+                url = m["url"]
+                if url not in url_map or dist < url_map[url][2]:
+                    url_map[url] = (d, m, dist)
+            merged = sorted(url_map.values(), key=lambda x: x[2])[:top_k]
+            docs      = [x[0] for x in merged]
+            metas     = [x[1] for x in merged]
+            distances = [x[2] for x in merged]
+
     # If structural found entity URIs, merge entity-specific chunks into results
     if entity_uris:
         entity_docs, entity_metas, entity_dists = retrieve_by_entity_uris(
@@ -243,7 +289,7 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
     if "I don't have information about that" in answer_text:
         result = {"answer": answer_text, "sources": []}
         if debug:
-            result["_debug"] = _build_debug(sparql_selections, sparql_context, entity_uris)
+            result["_debug"] = _build_debug(sparql_selections, sparql_context, entity_uris, crag_triggered)
         return result
 
     seen = set()
@@ -255,11 +301,11 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
 
     result = {"answer": answer_text, "sources": unique_sources}
     if debug:
-        result["_debug"] = _build_debug(sparql_selections, sparql_context, entity_uris)
+        result["_debug"] = _build_debug(sparql_selections, sparql_context, entity_uris, crag_triggered)
     return result
 
 
-def _build_debug(selections: list, sparql_context: str, entity_uris: list) -> dict:
+def _build_debug(selections: list, sparql_context: str, entity_uris: list, crag_triggered: bool = False) -> dict:
     query_labels = [
         name if not params else f"{name}({', '.join(f'{k}=…{v[-20:]}' for k, v in params.items())})"
         for name, params in selections
@@ -268,4 +314,5 @@ def _build_debug(selections: list, sparql_context: str, entity_uris: list) -> di
         "sparql_queries": query_labels,
         "sparql_context_preview": sparql_context[:400] if sparql_context else "(empty)",
         "entity_uris": entity_uris,
+        "crag_triggered": crag_triggered,
     }

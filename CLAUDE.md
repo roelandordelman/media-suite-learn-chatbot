@@ -65,6 +65,7 @@ Both paths always run for every question. The LLM is only used for query expansi
 2. `_retrieve()` — embed all variants, semantic search in ChromaDB (top_k×6 candidates)
 3. Priority slots: FAQ/Help/How-to chunks get 2 reserved result slots so tutorial volume can't crowd them out
 4. Dedup by title+section, then by URL
+5. **CRAG gate** — if structural returned nothing and best narrative distance > `CRAG_RETRIEVAL_THRESHOLD` (0.75), `_reformulate_query()` asks the LLM to rephrase with different vocabulary, then retries retrieval once; results are merged (best-score-per-URL wins)
 
 The LLM generates an answer from whatever context both paths returned. If only narrative context is present (structural returned nothing), the narrative relevance threshold still applies.
 
