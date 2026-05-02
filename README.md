@@ -196,6 +196,6 @@ python3 query_debug.py "your question here" --top-k 10
 
 **LLM non-determinism in generation**: routing is deterministic but the LLM occasionally omits expected terms from answers when multiple pieces of context compete (~1 failure per eval run at 50% key-term threshold). Not a routing problem.
 
-**Conversational search**: the current implementation is single-turn. Planned: history-aware query reformulation (rewrite follow-up questions as standalone queries before embedding), retrieval confidence scoring (ask a clarifying question rather than generating a weak answer), and proactive follow-up suggestions.
+**Conversational search**: conversation history is passed to the LLM for generation, and follow-up questions are rewritten as standalone queries before embedding (`_rewrite_as_standalone()` — fires only when a pronoun/demonstrative is detected). Remaining: retrieval confidence scoring (ask a clarifying question rather than generating a weak answer) and proactive follow-up suggestions.
 
 **Agentic RAG**: CRAG is implemented — if the structural path returns nothing and narrative retrieval is weak (best L2 distance > 0.75), the pipeline reformulates the question with different vocabulary and retries once, merging results. Next stages: hybrid routing (standard pipeline for simple questions, ReAct for complex) → full ReAct agent. See [docs/agentic_rag.md](docs/agentic_rag.md) and the [project roadmap](https://github.com/roelandordelman/mediasuite-knowledge-base/blob/main/docs/roadmap.md).
