@@ -208,6 +208,29 @@ Each new named query covers an entire class of natural language questions. Candi
 - `workflows_by_status` — filter by Fully supported / Aspirational / Partially supported
 - `tools_for_workflow` — inverse of `workflows_by_tool`
 
+## Conversational search
+
+The current implementation is single-turn: each question is answered independently
+without memory of previous questions. The planned conversational extension adds
+three capabilities:
+
+**History-aware query reformulation** — before embedding, the question is rewritten
+as a standalone query using conversation history. This handles follow-up questions
+like "what about for radio?" which are meaningless without context.
+
+**Retrieval confidence scoring** — after retrieval, the system evaluates whether
+the returned chunks actually answer the question. If confidence is low, it asks
+the researcher a targeted clarifying question rather than generating a weak answer.
+
+**Proactive follow-up suggestions** — after a successful answer, the system
+suggests 2-3 related questions a researcher might naturally ask next. Particularly
+useful for researchers who don't yet know what the Media Suite can do.
+
+These are implemented as additions to `api/rag.py` and `api/main.py` — the
+architecture does not change, conversation history is passed as additional context
+with each request.
+
+
 ## Known limitations
 
 **Model non-determinism**: the structural path currently uses an LLM to select SPARQL query templates. The same question can route differently between runs. The planned embedding-based routing (see above) eliminates this.

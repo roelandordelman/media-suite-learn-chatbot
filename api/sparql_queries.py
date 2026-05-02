@@ -136,6 +136,22 @@ WHERE {{
 ORDER BY ?label
 """
 
+# Q5b: Collections requiring institutional access (NON_PUBLIC)
+QUERIES["restricted_collections"] = PREFIXES + """
+SELECT ?uri ?label ?accessRights ?conditions
+WHERE {{
+  GRAPH <{graph}> {{
+    ?uri a dcat:Dataset ;
+         rdfs:label ?label ;
+         dcterms:accessRights ?accessRights ;
+         clariah:partOf ms:MediaSuite .
+    FILTER(?accessRights != euright:PUBLIC)
+    OPTIONAL {{ ?uri schema:conditionsOfAccess ?conditions }}
+  }}
+}}
+ORDER BY ?label
+"""
+
 # Q6: Workflows that use a given tool as an instrument
 QUERIES["workflows_by_tool"] = PREFIXES + """
 SELECT DISTINCT ?wfUri ?wfName ?status ?stepName

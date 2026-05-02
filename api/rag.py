@@ -176,42 +176,47 @@ def _retrieve(queries: list[str], collection: chromadb.Collection, top_k: int) -
 def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug: bool = False) -> dict:
     """
     Return {"answer": str, "sources": [{"title": str, "url": str}]}.
-    When debug=True, also include "_debug": {"route", "sparql_queries", "sparql_context", "entity_uris"}.
+    When debug=True, also include "_debug": {"sparql_queries", "sparql_context_preview", "entity_uris"}.
+
+    Both retrieval paths always run:
+    - Structural: embedding similarity selects SPARQL queries → Fuseki returns facts.
+                  Returns empty when no queries exceed the similarity threshold.
+    - Narrative:  LLM expands the question → embed → ChromaDB semantic search.
+    The LLM generates an answer from whatever context both paths returned.
     """
-    from api.router import classify_question, sparql_query_structural, retrieve_by_entity_uris
+    from api.router import sparql_query_structural, retrieve_by_entity_uris
 
     _, kg_cfg = _load_config()
     collection = _get_collection()
 
-    route = "narrative"
-    kg_enabled = bool(kg_cfg.get("fuseki_url"))
-    if kg_enabled:
-        route = classify_question(question, GENERATE_MODEL)
-
+    # Structural path — always attempt; no LLM involved in routing
     sparql_context = ""
     sparql_selections = []
     entity_uris = []
-    docs, metas, distances = [], [], []
+    if kg_cfg.get("fuseki_url"):
+        sparql_context, entity_uris, sparql_selections = sparql_query_structural(
+            question, kg_cfg, EMBED_MODEL
+        )
 
-    if route == "structural" and kg_enabled:
-        sparql_context, entity_uris, sparql_selections = sparql_query_structural(question, kg_cfg, GENERATE_MODEL)
-        if entity_uris:
-            docs, metas, distances = retrieve_by_entity_uris(
-                question, entity_uris, collection, EMBED_MODEL, top_k
-            )
-        # Fall back to vector search only if SPARQL also returned nothing
-        if not sparql_context:
-            route = "narrative"
+    # Narrative path — always run
+    queries = _expand_query(question)
+    docs, metas, distances = _retrieve(queries, collection, top_k)
 
-    if route == "narrative":
-        queries = _expand_query(question)
-        docs, metas, distances = _retrieve(queries, collection, top_k)
+    # If structural found entity URIs, merge entity-specific chunks into results
+    if entity_uris:
+        entity_docs, entity_metas, entity_dists = retrieve_by_entity_uris(
+            question, entity_uris, collection, EMBED_MODEL, top_k
+        )
+        existing_urls = {m["url"] for m in metas}
+        for d, m, dist in zip(entity_docs, entity_metas, entity_dists):
+            if m["url"] not in existing_urls:
+                docs.append(d)
+                metas.append(m)
+                distances.append(dist)
 
-    # For structural: SPARQL context is primary; chunks are supplemental.
-    # For narrative: only chunk context, apply relevance threshold.
-    if route == "narrative":
-        if not distances or distances[0] > MAX_DISTANCE:
-            return {"answer": NO_ANSWER_RESPONSE, "sources": []}
+    # Bail out only if neither path returned anything useful
+    if not sparql_context and (not distances or distances[0] > MAX_DISTANCE):
+        return {"answer": NO_ANSWER_RESPONSE, "sources": []}
 
     # Build context: SPARQL facts first, then chunk text
     context_parts = []
@@ -238,7 +243,7 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
     if "I don't have information about that" in answer_text:
         result = {"answer": answer_text, "sources": []}
         if debug:
-            result["_debug"] = _build_debug(route, sparql_selections, sparql_context, entity_uris)
+            result["_debug"] = _build_debug(sparql_selections, sparql_context, entity_uris)
         return result
 
     seen = set()
@@ -250,17 +255,16 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
 
     result = {"answer": answer_text, "sources": unique_sources}
     if debug:
-        result["_debug"] = _build_debug(route, sparql_selections, sparql_context, entity_uris)
+        result["_debug"] = _build_debug(sparql_selections, sparql_context, entity_uris)
     return result
 
 
-def _build_debug(route: str, selections: list, sparql_context: str, entity_uris: list) -> dict:
+def _build_debug(selections: list, sparql_context: str, entity_uris: list) -> dict:
     query_labels = [
         name if not params else f"{name}({', '.join(f'{k}=…{v[-20:]}' for k, v in params.items())})"
         for name, params in selections
     ]
     return {
-        "route": route,
         "sparql_queries": query_labels,
         "sparql_context_preview": sparql_context[:400] if sparql_context else "(empty)",
         "entity_uris": entity_uris,

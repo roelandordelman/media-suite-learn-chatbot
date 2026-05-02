@@ -70,7 +70,6 @@ def evaluate(questions_path: Path, threshold: float, verbose: bool, debug: bool 
                 print(f"          {notes}")
             if debug:
                 dbg = result.get("_debug", {})
-                print(f"          Route:          {dbg.get('route', '?')}")
                 print(f"          SPARQL queries: {dbg.get('sparql_queries', []) or '(none)'}")
             print(f"          Answer: {generated[:300]}{'…' if len(generated) > 300 else ''}")
             print()
@@ -103,7 +102,6 @@ def evaluate(questions_path: Path, threshold: float, verbose: bool, debug: bool 
 
         if debug:
             dbg = result.get("_debug", {})
-            print(f"       Route:           {dbg.get('route', '?')}")
             queries = dbg.get("sparql_queries", [])
             print(f"       SPARQL queries:  {queries if queries else '(none selected)'}")
             print(f"       SPARQL context:  {dbg.get('sparql_context_preview', '(empty)')[:200]}")

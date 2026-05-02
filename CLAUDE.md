@@ -21,8 +21,8 @@ Do not add ingestion or embedding code here.
 
 ## Stack
 
-- **Generation + query expansion + query classification**: mistral via Ollama (local)
-- **Embeddings**: nomic-embed-text via Ollama (local)
+- **Generation + query expansion**: llama3.1:8b via Ollama (local)
+- **Embeddings + SPARQL routing**: nomic-embed-text via Ollama (local)
 - **Vector store**: ChromaDB HTTP server (port 8001), built in mediasuite-knowledge-base
 - **Knowledge graph**: Apache Jena Fuseki (port 3030, dataset `mediasuite`), built in mediasuite-knowledge-base
 - **Backend**: FastAPI + uvicorn
@@ -33,8 +33,9 @@ Do not add ingestion or embedding code here.
 ```
 api/
   main.py            — FastAPI app (POST /ask endpoint, conversation history)
-  rag.py             — Full RAG pipeline: classify → expand/SPARQL → retrieve → generate
-  router.py          — Retrieval router: classify + SPARQL query selection + result formatting
+  rag.py             — Full RAG pipeline: both paths always run → generate
+  router.py          — Structural path: SPARQL query execution + result formatting
+  query_index.py     — Embedding-based SPARQL query selector (QueryIndex singleton)
   sparql_queries.py  — Named SPARQL query library (10 templates) + run_query()
 widget/
   chatbot.js         — Floating chat widget, maintains conversation history
@@ -50,22 +51,22 @@ query_debug.py       — CLI: retrieval-only debug (chunks + scores, no generati
 
 ## Retrieval architecture
 
-Two paths, selected by `router.classify_question()` using a one-word LLM prompt:
+Both paths always run for every question. The LLM is only used for query expansion and answer generation — not for routing.
 
-**Narrative** ("how do I annotate?", "what is the Media Suite?"):
-1. `_expand_query()` — mistral generates 3 alternative phrasings
+**Structural path** ("what tools exist for X?", "which collections are open?", "what workflows use Y?"):
+1. `QueryIndex.select()` — embeds the question, computes cosine similarity against pre-embedded trigger questions per named query, selects queries above threshold (0.60). Deterministic.
+2. For parametric queries, fills URI slots by embedding similarity against known entity names (tool names, collection names, workflow names, tadirah activity labels)
+3. SPARQL runs against Fuseki; rows are formatted as `[Knowledge graph facts]` context
+4. Entity URIs from results also filter ChromaDB for supporting documentation chunks
+5. Returns empty when no queries exceed threshold (question is purely narrative)
+
+**Narrative path** ("how do I annotate?", "what is the Media Suite?"):
+1. `_expand_query()` — llama3.1:8b generates 3 alternative phrasings
 2. `_retrieve()` — embed all variants, semantic search in ChromaDB (top_k×6 candidates)
 3. Priority slots: FAQ/Help/How-to chunks get 2 reserved result slots so tutorial volume can't crowd them out
 4. Dedup by title+section, then by URL
 
-**Structural** ("what tools exist for X?", "which collections are open?", "what workflows use Y?"):
-1. `router._select_queries()` — mistral selects named query(ies) from `sparql_queries.QUERIES` and fills in URIs from `config.yaml` entity maps
-2. SPARQL runs against Fuseki; rows are formatted as `[Knowledge graph facts]` context
-3. Entity URIs from results filter ChromaDB for supporting documentation chunks
-4. LLM answers from SPARQL facts + chunk context combined
-5. Fallback to narrative path if SPARQL returns no context
-
-**Known limitation**: mistral 7B is inconsistent on structural questions — it sometimes ignores the SPARQL context. A better model would improve structural answer quality significantly.
+The LLM generates an answer from whatever context both paths returned. If only narrative context is present (structural returned nothing), the narrative relevance threshold still applies.
 
 ## Chunk schema (ChromaDB metadata fields)
 
@@ -93,7 +94,7 @@ python evaluate/eval_router.py                 # structural questions, scores ke
 python evaluate/eval_router.py --verbose       # show full answers on failure
 ```
 
-Baseline: 7/7 narrative (100%). Structural: ~3-5/10 with mistral (non-deterministic); would improve with a better model.
+Baseline: 14/14 narrative (100%). Structural: 26/26 (100%) with embedding-based routing; was 3-5/10 with LLM-based routing. Occasional LLM non-determinism in answer generation (~1 failure per run at 50% threshold); routing itself is deterministic.
 
 `eval_retrieval.py` skips questions with `category: structural`. `eval_router.py` only runs `category: structural` questions.
 

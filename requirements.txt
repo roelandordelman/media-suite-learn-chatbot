@@ -4,6 +4,7 @@ pyyaml
 # Embeddings & vector store
 ollama
 chromadb
+numpy
 
 # HTTP (SPARQL queries to Fuseki)
 requests

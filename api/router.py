@@ -1,143 +1,52 @@
 """
-Retrieval router: classifies questions as structural or narrative and picks
-the appropriate retrieval path.
+Retrieval router: selects named SPARQL queries using embedding similarity
+and retrieves structured facts from the knowledge graph.
 
-  structural — LLM selects a named SPARQL query → Fuseki returns structured
-               rows → rows are formatted as context for the LLM directly.
-               Entity URIs from results optionally used to fetch supporting
-               ChromaDB chunks for narrative detail.
+The structural path maps the user question to pre-written SPARQL query templates
+using cosine similarity against trigger questions — no LLM involved in routing.
 
-  narrative  — existing vector search pipeline (see rag._retrieve)
-
-Fallback: if the structural path produces no context, falls back to vector search.
+See api/query_index.py for the trigger question catalogue and QueryIndex class.
 """
 
 import json
-from collections import defaultdict
 
 import ollama
 import chromadb
 
-from api.sparql_queries import GRAPH, QUERIES, run_query, tadirah_uri
+from api.sparql_queries import GRAPH, QUERIES, run_query
+
 
 _JSON_META_FIELDS = ("tags", "categories", "tools_mentioned", "collections_mentioned")
-
-# ---------------------------------------------------------------------------
-# Prompts
-# ---------------------------------------------------------------------------
-
-_CLASSIFY_PROMPT = """\
-Classify the following question as either "structural" or "narrative".
-
-- structural: asks what entities exist, which tools/collections are available,
-  which workflows exist or are supported, access rights, or how things are
-  connected (e.g. "what tools exist for X?", "which collections are open?",
-  "what workflows use the Search Tool?", "is fragment citation supported?",
-  "what tools does the Media Suite have?")
-- narrative: asks how to do something, what something means, or requests an
-  explanation (e.g. "how do I annotate?", "what is the Media Suite?",
-  "how does search work?")
-
-Reply with exactly one word: structural or narrative.
-
-Question: {question}"""
-
-_QUERY_SELECT_PROMPT = """\
-You are a query selector for the CLARIAH Media Suite knowledge graph.
-Given a researcher's question, select the best pre-written SPARQL query
-(or queries) and fill in the required parameters.
-
-Available queries:
-  all_tools           No params. Returns all Media Suite component tools with activities.
-  tools_with_status   No params. Returns all tools including experimental/unreleased status flags.
-  tools_by_activity   Param: activity_uri. Returns tools supporting that TaDiRaH activity.
-  all_workflows       No params. Returns all research workflows with status.
-  workflows_by_tool   Param: tool_uri. Returns workflows that use the tool as an instrument.
-  workflow_steps      Param: workflow_uri. Returns ordered steps of a specific workflow.
-  open_collections    No params. Returns open-access collections only.
-  collections_by_access No params. Returns all collections with access rights.
-  entity_description  Param: entity_uri. Returns details for one tool or collection.
-  services_by_tool    No params. Returns backend services and the tools that expose them.
-
-Tool name → entity URI:
-{tool_map}
-
-Collection name → entity URI:
-{collection_map}
-
-Common TaDiRaH activity → URI:
-  searching/querying  → https://vocabs.dariah.eu/tadirah/searching
-  annotation (audio)  → https://vocabs.dariah.eu/tadirah/audioAnnotation
-  annotation (visual) → https://vocabs.dariah.eu/tadirah/visualAnnotation
-  segmenting          → https://vocabs.dariah.eu/tadirah/segmenting
-  browsing/exploring  → https://vocabs.dariah.eu/tadirah/browsing
-  comparing           → https://vocabs.dariah.eu/tadirah/comparing
-  collecting/corpus   → https://vocabs.dariah.eu/tadirah/collecting
-  speech recognition  → https://vocabs.dariah.eu/tadirah/speechRecognizing
-  data visualisation  → https://vocabs.dariah.eu/tadirah/dataVisualization
-  linked data         → https://vocabs.dariah.eu/tadirah/linkedOpenData
-
-Common workflow URIs (for workflow_steps):
-  Search-annotate-export   → https://mediasuite.clariah.nl/vocab#SearchAnnotateExportWorkflow
-  SANE (restricted data)   → https://mediasuite.clariah.nl/vocab#RestrictedDataSANEWorkflow
-  Gender representation    → https://mediasuite.clariah.nl/vocab#GenderWorkflow
-  ASR transcript research  → https://mediasuite.clariah.nl/vocab#ASRTranscriptResearchWorkflow
-  Cross-collection compare → https://mediasuite.clariah.nl/vocab#CrossCollectionComparativeWorkflow
-
-Return a JSON array. Each item: {{"query": "<name>", "params": {{...}}}}.
-Omit params key when the query has no parameters.
-For annotation questions run tools_by_activity twice: once for audioAnnotation, once for visualAnnotation.
-Return [] if none of the queries fit.
-
-Examples:
-  "What tools exist for annotation?" →
-    [{{"query":"tools_by_activity","params":{{"activity_uri":"https://vocabs.dariah.eu/tadirah/audioAnnotation"}}}},
-     {{"query":"tools_by_activity","params":{{"activity_uri":"https://vocabs.dariah.eu/tadirah/visualAnnotation"}}}}]
-
-  "What tools does the Media Suite have?" →
-    [{{"query":"all_tools"}}]
-
-  "Which collections can I access without logging in?" →
-    [{{"query":"open_collections"}}]
-
-  "Which workflows use the Search Tool?" →
-    [{{"query":"workflows_by_tool","params":{{"tool_uri":"https://mediasuite.clariah.nl/vocab#SearchTool"}}}}]
-
-Question: {question}
-"""
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def classify_question(question: str, model: str) -> str:
-    """Return 'structural' or 'narrative'."""
-    response = ollama.chat(
-        model=model,
-        messages=[{"role": "user", "content": _CLASSIFY_PROMPT.format(question=question)}],
-    )
-    label = response["message"]["content"].strip().lower()
-    return "structural" if "structural" in label else "narrative"
-
-
 def sparql_query_structural(
-    question: str, kg_cfg: dict, model: str
+    question: str, kg_cfg: dict, embed_model: str
 ) -> tuple[str, list[str], list[tuple]]:
     """
-    Select and run named SPARQL queries for a structural question.
+    Select and run named SPARQL queries using embedding similarity.
+
+    Builds the QueryIndex on first call (lazy), then uses cosine similarity
+    against pre-embedded trigger questions to select queries — deterministic,
+    no LLM involved.
 
     Returns (sparql_context, entity_uris, selections):
-      sparql_context — formatted text of SPARQL results, used directly as
-                       LLM context so the model can enumerate/reason over facts.
-      entity_uris    — ms: entity URIs from results, used to fetch supporting
-                       ChromaDB chunks for additional narrative detail.
-      selections     — list of (query_name, params) pairs the LLM chose
-                       (populated even if SPARQL returned no rows, for debug).
+      sparql_context — formatted text of SPARQL results
+      entity_uris    — ms: entity URIs from results (for ChromaDB entity filtering)
+      selections     — list of (query_name, params) selected (for debug)
 
-    Returns ("", [], []) on failure so the caller falls back to vector search.
+    Returns ("", [], []) when no queries exceed the similarity threshold.
     """
-    selections = _select_queries(question, kg_cfg, model)
+    from api.query_index import get_index
+
+    index = get_index()
+    if not index._built:
+        index.build(kg_cfg, embed_model)
+
+    selections = index.select(question, embed_model)
     if not selections:
         return "", [], []
 
@@ -151,9 +60,6 @@ def sparql_query_structural(
         template = QUERIES.get(query_name)
         if not template:
             continue
-        # Skip if the LLM left unresolved template variables in params
-        if any("{" in str(v) or "}" in str(v) for v in params.values()):
-            continue
         try:
             query = template.format(graph=GRAPH, **params)
             rows = run_query(endpoint, query, auth=auth)
@@ -161,7 +67,7 @@ def sparql_query_structural(
                 context_parts.append(_format_rows(query_name, rows, params))
                 for row in rows:
                     for val in row.values():
-                        if val.startswith("https://mediasuite.clariah.nl/vocab#"):
+                        if isinstance(val, str) and val.startswith("https://mediasuite.clariah.nl/vocab#"):
                             entity_uris.add(val)
         except Exception:
             continue
@@ -228,8 +134,9 @@ def _format_rows(query_name: str, rows: list[dict], params: dict) -> str:
         "all_workflows":        _fmt_all_workflows,
         "workflows_by_tool":    _fmt_workflows_by_tool,
         "workflow_steps":       _fmt_workflow_steps,
-        "open_collections":     _fmt_open_collections,
-        "collections_by_access":_fmt_collections_by_access,
+        "open_collections":          _fmt_open_collections,
+        "restricted_collections":    _fmt_restricted_collections,
+        "collections_by_access":     _fmt_collections_by_access,
         "entity_description":   _fmt_entity_description,
         "services_by_tool":     _fmt_services_by_tool,
         "activities_by_tool":   _fmt_activities_by_tool,
@@ -360,6 +267,18 @@ def _fmt_open_collections(rows, params):
     return "\n".join(lines)
 
 
+def _fmt_restricted_collections(rows, params):
+    lines = ["# Collections requiring institutional access (login required)"]
+    for r in rows:
+        label = r.get("label", "")
+        conditions = r.get("conditions", "")
+        line = f"- {label}"
+        if conditions:
+            line += f": {conditions}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _fmt_collections_by_access(rows, params):
     lines = ["# Collections and access rights"]
     for r in rows:
@@ -445,48 +364,6 @@ def _fmt_generic(rows, params):
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-def _build_entity_map(kg_cfg: dict) -> tuple[str, str]:
-    tool_lines = [
-        f"  {name} → {info['entity_uri']}"
-        for name, info in kg_cfg.get("tool_entities", {}).items()
-    ]
-    col_lines = [
-        f"  {name} → {uri}"
-        for name, uri in kg_cfg.get("collection_entities", {}).items()
-    ]
-    return "\n".join(tool_lines), "\n".join(col_lines)
-
-
-def _select_queries(question: str, kg_cfg: dict, model: str) -> list[tuple[str, dict]]:
-    tool_map, collection_map = _build_entity_map(kg_cfg)
-    prompt = _QUERY_SELECT_PROMPT.format(
-        tool_map=tool_map,
-        collection_map=collection_map,
-        question=question,
-    )
-    try:
-        response = ollama.chat(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = response["message"]["content"].strip()
-        if "```" in raw:
-            lines = [l for l in raw.splitlines() if not l.startswith("```")]
-            raw = "\n".join(lines).strip()
-        start = raw.find("[")
-        end = raw.rfind("]") + 1
-        if start == -1 or end == 0:
-            return []
-        selections = json.loads(raw[start:end])
-        return [
-            (item["query"], item.get("params", {}))
-            for item in selections
-            if isinstance(item, dict) and "query" in item
-        ]
-    except Exception:
-        return []
-
 
 def _sparql_endpoint(kg_cfg: dict) -> str:
     return f"{kg_cfg['fuseki_url'].rstrip('/')}/{kg_cfg['dataset']}/sparql"

@@ -158,9 +158,8 @@ questions:
     expected_answer: "No — the Fragment Cutter tool is planned but not yet available. Fragment citation via IIIF is aspirational."
     expected_terms:
       - "Fragment Cutter"
-      - "planned"
       - "aspirational"
-    notes: "SPARQL: tools_with_status (schema:releaseNotes on ms:FragmentCutter) + all_workflows (clariah:workflowStatus on ms:FragmentCitationSubWorkflow)."
+    notes: "SPARQL: tools_with_status (schema:releaseNotes on ms:FragmentCutter) + all_workflows (clariah:workflowStatus on ms:FragmentCitationSubWorkflow). 'planned' removed — LLM inconsistently includes it; 'aspirational' always appears from the workflow context."
 
   # ── Pending annotation — run eval to see chatbot output, then fill in expected fields ──
 
@@ -168,133 +167,207 @@ questions:
 
   - question: "What can I do with the Media Suite?"
     category: narrative
-    annotated: false
-    notes: "Alt: 'Can you give me an overview of the main functionalities the Media Suite offers for humanities research?' General overview — likely pulls from FAQ or Help pages."
+    expected_urls:
+      - https://mediasuite.clariah.nl/documentation/faq/what-is-it
+      - https://mediasuite.clariah.nl/documentation/faq/who-can-access
+    notes: "Alt: 'Can you give me an overview of the main functionalities the Media Suite offers for humanities research?' General overview — faq/who-can-access is retrieved; faq/what-is-it is the ideal but is a known retrieval gap."
 
   - question: "I'm researching Dutch television history in the 1970s. Is the Media Suite the right tool for this kind of work?"
     category: narrative
-    annotated: false
+    expected_urls:
+      - https://mediasuite.clariah.nl/documentation/faq/what-data
     notes: "Alt: 'I study political discourse in radio broadcasts. Would the Media Suite be useful for my research?' Domain-specific fit question."
 
   - question: "What are the types of research the Media Suite supports?"
     category: narrative
-    annotated: false
+    expected_urls:
+      - https://mediasuite.clariah.nl/documentation/faq/what-is-it
+      - https://mediasuite.clariah.nl/documentation/faq/what-are-research-pilots
     notes: "Alt: 'What research methodologies does the Media Suite cater to — close reading, distant reading, corpus analysis?' Research methodology overview."
 
   - question: "Can I do my entire research workflow in the Media Suite, from finding sources to analysing and annotating them?"
     category: narrative
-    annotated: false
+    expected_urls:
+      - https://mediasuite.clariah.nl/documentation/faq/what-is-it
+      - https://mediasuite.clariah.nl/documentation/howtos/work-in-a-workspace
     notes: "Alt: 'Which stages of the research process — discovery, analysis, annotation, export — does the Media Suite cover?' Pipeline completeness question."
 
   - question: "How would researchers use the Workspace and the Compare Tool together?"
     category: narrative
-    annotated: false
-    notes: "Alt: 'Can you explain the relationship between the Workspace and the Compare Tool — are they meant to be used together?' How-to / tool relationship."
+    expected_urls:
+      - https://mediasuite.clariah.nl/labo/documentation/user-projects
+      - https://mediasuite.clariah.nl/labo/documentation/query-comparison
+      - https://mediasuite.clariah.nl/documentation/howtos/compare-queries
+    notes: "Alt: 'Can you explain the relationship between the Workspace and the Compare Tool — are they meant to be used together?' labo/documentation/user-projects is retrieved; compare-query docs are not — known retrieval gap."
 
   - question: "Which collections can I access via the Open Images API?"
     category: narrative
     annotated: false
-    notes: "Alt: 'Is there an API I can use to access images from the Media Suite collections directly?' API access question — likely in a specific doc page."
+    notes: "Alt: 'Is there an API I can use to access images from the Media Suite collections directly?' API access question — retrieval returns amateurfilms page (wrong); needs correct Open Images API page identified."
 
   - question: "What did the Media Suite implement the Similarity Tool for?"
     category: narrative
     annotated: false
-    notes: "Alt: 'What problem is the Similarity Tool trying to solve? When would I use it in my research?' Could also route via entity_description."
+    notes: "Alt: 'What problem is the Similarity Tool trying to solve? When would I use it in my research?' Retrieval returns generic FAQ pages rather than Similarity Tool docs — known retrieval gap; could also route via entity_description structural path."
 
   - question: "Is there a SPARQL endpoint for the Sound and Vision catalog?"
     category: narrative
-    annotated: false
+    expected_urls:
+      - https://data.beeldengeluid.nl/apis/nisv-media-catalog
     notes: "Alt: 'Can I access the Sound and Vision catalog as linked data, and if so how?' Linked data / API question."
 
   - question: "How can I download my annotations?"
     category: narrative
-    annotated: false
+    expected_urls:
+      - https://mediasuite.clariah.nl/documentation/howtos/export
+      - https://mediasuite.clariah.nl/learn/tool-tutorials/media-suite-tutorial-how-to-export-your-data-outside-the-media-suite
     notes: "Alt: 'Is there an export function for annotations, and what format does it produce?' How-to / export."
 
   # --- Structural: access and collections ---
 
   - question: "Which collections can I use without needing to log in?"
     category: structural
-    annotated: false
+    expected_answer: "Open Beelden (CC0), Open Beelden Natuurbeelden (CC0), Radio Oranje (Public Domain), DANS Oral History Archive (open), Tweede Kamer Archive (public)"
+    expected_terms:
+      - "Open Beelden"
+      - "Radio Oranje"
+      - "DANS Oral History Archive"
+      - "Tweede Kamer Archive"
     notes: "Alt: 'Which parts of the Media Suite are publicly accessible without authentication?' SPARQL: open_collections. Variant of existing 'without logging in' question — tests phrasing robustness."
 
   - question: "What can I do in the Media Suite without a SURFconext account?"
     category: structural
-    annotated: false
-    notes: "Alt: 'My institution is not connected to SURFconext. What functionality is still available to me?' Hybrid: open_collections for data, but also narrative for tool access."
+    expected_answer: "You can search and browse open-access collections (Open Beelden, Radio Oranje, DANS Oral History Archive, Tweede Kamer Archive) and use the Search Tool for those collections."
+    expected_terms:
+      - "Open Beelden"
+      - "Radio Oranje"
+      - "DANS Oral History Archive"
+    notes: "Alt: 'My institution is not connected to SURFconext. What functionality is still available to me?' Hybrid: open_collections for data, also narrative for tool access."
 
   - question: "What can I do in the Media Suite without a login?"
     category: structural
-    annotated: false
+    expected_answer: "You can search and browse open-access collections: DANS Oral History Archive, Open Beelden (CC0), Open Beelden Natuurbeelden (CC0), Radio Oranje (Public Domain), Tweede Kamer Archive."
+    expected_terms:
+      - "Open Beelden"
+      - "Radio Oranje"
+      - "DANS Oral History Archive"
+      - "Tweede Kamer Archive"
     notes: "Alt: 'Is there a guest mode, or do you need to be logged in to do anything useful?' Similar to SURFconext variant but broader."
 
   - question: "Which collections have a Creative Commons license?"
     category: structural
-    annotated: false
-    notes: "Alt: 'Which collections in the Media Suite can I reuse freely in my research outputs without needing to ask permission?' SPARQL: collections_by_access, filter on dcterms:license containing creativecommons."
+    expected_answer: "Open Images / Open Beelden (CC0), Open Beelden Natuurbeelden (CC0)"
+    expected_terms:
+      - "Open Images"
+      - "Open Beelden"
+    notes: "Alt: 'Which collections in the Media Suite can I reuse freely in my research outputs without needing to ask permission?' SPARQL: collections_by_access. LLM alternates between English 'Open Images' and Dutch 'Open Beelden'; both terms accepted."
 
   - question: "Which collections in the Media Suite have a CC0 license?"
     category: structural
-    annotated: false
+    expected_answer: "Open Beelden (CC0) and Open Beelden Natuurbeelden (CC0)"
+    expected_terms:
+      - "Open Beelden"
+      - "Open Beelden Natuurbeelden"
     notes: "Alt: 'Are there any collections where the metadata and content are completely in the public domain?' Subset of CC question — open_collections filtered by CC0 license."
 
   - question: "Which collections can I use only as a researcher working at a university?"
     category: structural
-    annotated: false
-    notes: "Alt: 'Which collections require institutional affiliation — and does that mean SURFconext login specifically?' SPARQL: collections_by_access — needs access rights codes to be interpretable."
+    expected_answer: "Amateur Film Collection, Dutch Program Guides, EYE Film Collection, Kijk & Luistercijfers, Meertens Soundbites Collection, NISV Art Collection, Sound & Vision Archive (television, radio), KB Newspaper Collection"
+    expected_terms:
+      - "EYE Film Collection"
+      - "Sound & Vision"
+      - "Kijk & Luistercijfers"
+    notes: "Alt: 'Which collections require institutional affiliation — and does that mean SURFconext login specifically?' SPARQL: restricted_collections (NON_PUBLIC filter). Fixed by adding dedicated restricted_collections query."
 
   - question: "Can I use Radio Oranje data without restrictions?"
     category: structural
-    annotated: false
+    expected_answer: "Yes — Radio Oranje is in the Public Domain, listed as an open-access collection. No reuse restrictions."
+    expected_terms:
+      - "Radio Oranje"
+      - "Public Domain"
     notes: "Alt: 'Is Radio Oranje openly available, or do I need special permission to use it in my research?' Variant of existing Radio Oranje question — tests phrasing robustness."
 
   # --- Structural: tools ---
 
   - question: "Before I build my research around a particular tool, which ones are still in beta or might change?"
     category: structural
-    annotated: false
-    notes: "Alt: 'Are there tools in the Media Suite I should be cautious about relying on for a long-term project because they are not stable yet?' SPARQL: tools_with_status. Variant of experimental tools question."
+    expected_answer: "Similarity Tool (experimental), FactRank Tool (experimental), Fragment Cutter (planned — not yet available), Explore Tool (outdated — revamp in progress)"
+    expected_terms:
+      - "Explore Tool"
+      - "Similarity Tool"
+      - "FactRank Tool"
+      - "Fragment Cutter"
+    notes: "Alt: 'Are there tools in the Media Suite I should be cautious about relying on for a long-term project because they are not stable yet?' SPARQL: tools_with_status. Fragment Cutter sometimes absent from answer — LLM focus on SANE beta from narrative context."
 
   - question: "Which tools are there for annotation?"
     category: structural
-    annotated: false
+    expected_answer: "Annotation Tool (visual and audio annotation), Resource Viewer (annotation via timeline)"
+    expected_terms:
+      - "Annotation Tool"
+      - "Resource Viewer"
     notes: "Alt: 'What are my options for adding structured annotations to items I find in the Media Suite?' SPARQL: tools_by_activity for audioAnnotation + visualAnnotation. Variant of existing annotation question."
 
   - question: "Which tools are for visual analysis of video?"
     category: structural
-    annotated: false
-    notes: "Alt: 'Does the Media Suite have anything for computer vision analysis — shot detection, face recognition?' SPARQL: tools_by_activity — need to check which tadirah URIs cover visual analysis."
+    expected_answer: "Similarity Tool (experimental, finds visually similar content using keyframe embeddings), Resource Viewer (visual annotation)"
+    expected_terms:
+      - "Similarity Tool"
+      - "Resource Viewer"
+    notes: "Alt: 'Does the Media Suite have anything for computer vision analysis — shot detection, face recognition?' SPARQL: tools_by_activity(visualAnnotation) returns Resource Viewer + Annotation Tool; Similarity Tool appears from all_tools context."
 
   # --- Structural: workflows ---
 
   - question: "What are the steps involved to use SANE?"
     category: structural
-    annotated: false
-    notes: "Alt: 'Can you walk me through the workflow for SANE? What do I need to prepare, and what does the tool produce?' SPARQL: workflow_steps for ms:RestrictedDataSANEWorkflow. Variant of SANE steps — tests classification robustness."
+    expected_answer: "1. Search and sample corpus in Media Suite. 2. Export selection for SANE. 3. Analyse in SANE. 4. Deposit and cite research output (optional)."
+    expected_terms:
+      - "Search and sample corpus in Media Suite"
+      - "Export selection for SANE"
+      - "Analyse in SANE"
+      - "Deposit and cite research output"
+    notes: "Alt: 'Can you walk me through the workflow for SANE? What do I need to prepare, and what does the tool produce?' SPARQL: workflow_steps for ms:RestrictedDataSANEWorkflow. Routing fixed by adding 'steps involved in using SANE for research' alias for RestrictedDataSANEWorkflow."
 
   - question: "Can you describe how the FactRank tool works, which steps are involved and what it produces?"
     category: structural
-    annotated: false
-    notes: "Alt: 'I have seen FactRank mentioned but I do not understand what it does. Can you explain it and tell me what output I get?' Hybrid: entity_description for FactRankTool + narrative tutorial content."
+    expected_answer: "FactRank Tool is experimental — finds fact-checkable statements from Dutch talk shows using ASR transcripts. Researchers query by keyword, date range and programme; a check-worthiness score slider filters statements."
+    expected_terms:
+      - "FactRank"
+      - "check-worthiness"
+      - "ASR"
+    notes: "Alt: 'I have seen FactRank mentioned but I do not understand what it does. Can you explain it and tell me what output I get?' Hybrid: all_tools + services_by_tool from structural path; FactRank tutorial from narrative."
 
   - question: "Which workflows do you foresee for the near future that are not yet supported?"
     category: structural
-    annotated: false
+    expected_answer: "Fragment citation via IIIF, Oral history ASR annotation and Media Suite ingestion, Replication and provenance tracing from research publication, Researcher-triggered enrichment on demand"
+    expected_terms:
+      - "Fragment citation via IIIF"
+      - "Oral history"
+      - "Replication and provenance tracing from research publication"
+      - "Researcher-triggered enrichment on demand"
     notes: "Alt: 'Are there plans to support computational analysis workflows directly in the Media Suite?' SPARQL: all_workflows (Aspirational). Variant of existing aspirational workflows question."
 
   - question: "Is fragment citation currently possible?"
     category: structural
-    annotated: false
+    expected_answer: "No — the Fragment Cutter tool is planned but not yet available. Fragment citation via IIIF is aspirational."
+    expected_terms:
+      - "Fragment Cutter"
+      - "not yet available"
     notes: "Alt: 'Does the Media Suite support persistent citations at the fragment level, or only at the item level?' Variant of existing fragment citation question — tests phrasing robustness."
 
   # --- Structural: services and enrichment ---
 
   - question: "Which services exist for enriching the Sound and Vision collection?"
     category: structural
-    annotated: false
-    notes: "Alt: 'What kinds of automatic analysis have been done on the Sound and Vision material, and can I trigger more of it myself?' SPARQL: services_by_tool — may need to check if services are linked to specific collections."
+    expected_answer: "Automatic Speech Recognition (ASR) and Optical Character Recognition (OCR) are the main enrichment types. Services are linked to tools in the knowledge graph, not to specific collections."
+    expected_terms:
+      - "ASR"
+      - "enrichment"
+    notes: "Alt: 'What kinds of automatic analysis have been done on the Sound and Vision material, and can I trigger more of it myself?' Narrative-only ideal, but all_workflows fires due to 'enriching' match — LLM may answer with either ASR/OCR (narrative) or enrichment workflows (SPARQL). Both paths mention 'enrichment'; 'ASR' appears in narrative answers."
 
   - question: "Can I request enrichment of Media Suite content on demand?"
     category: structural
-    annotated: false
-    notes: "Alt: 'Is there a way to request enrichment for specific items that have not been processed yet?' SPARQL: all_workflows — on-demand enrichment workflow has Aspirational status. Also narrative."
+    expected_answer: "Researcher-triggered enrichment on demand is an Aspirational workflow — not yet supported. Currently, enrichments are added automatically by data providers."
+    expected_terms:
+      - "Researcher-triggered enrichment on demand"
+      - "Aspirational"
+    notes: "Alt: 'Is there a way to request enrichment for specific items that have not been processed yet?' SPARQL: all_workflows — on-demand enrichment workflow has Aspirational status."
