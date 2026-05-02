@@ -298,7 +298,32 @@ class QueryIndex:
             for params in self._fill_params(qname, q_emb, q_norm):
                 selections.append((qname, params))
 
+        # Named-entity detection: if the question contains a known tool or
+        # collection name verbatim, always run entity_description with that URI.
+        # This catches "Tell me about the Compare Tool" regardless of trigger similarity.
+        named_uri = self._detect_named_entity(question)
+        if named_uri:
+            existing = [i for i, (qn, _) in enumerate(selections) if qn == "entity_description"]
+            if existing:
+                # Replace cosine-similarity entity pick with the named one
+                selections[existing[0]] = ("entity_description", {"entity_uri": named_uri})
+            elif len(selections) < 4:
+                selections.append(("entity_description", {"entity_uri": named_uri}))
+
         return selections
+
+    def _detect_named_entity(self, question: str) -> str | None:
+        """
+        Return the URI of the longest tool or collection name found verbatim in
+        the question (case-insensitive). Longer names checked first to prefer
+        specific matches over partial ones (e.g. 'Annotation Tool' before 'Tool').
+        """
+        q_lower = question.lower()
+        entities = self._entities.get("tool", []) + self._entities.get("collection", [])
+        for label, uri, _ in sorted(entities, key=lambda x: len(x[0]), reverse=True):
+            if len(label) >= 5 and label.lower() in q_lower:
+                return uri
+        return None
 
     # ------------------------------------------------------------------
     # Parameter filling

@@ -69,6 +69,9 @@ def sparql_query_structural(
                     for val in row.values():
                         if isinstance(val, str) and val.startswith("https://mediasuite.clariah.nl/vocab#"):
                             entity_uris.add(val)
+                # entity_description subject URI is in params, not returned as a value
+                if query_name == "entity_description" and "entity_uri" in params:
+                    entity_uris.add(params["entity_uri"])
         except Exception:
             continue
 
