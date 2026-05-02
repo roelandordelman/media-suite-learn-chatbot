@@ -71,7 +71,7 @@ One named query covers an entire *class* of natural language questions. `tools_b
 
 Selecting the right named query is a *matching* problem (which of these 10 templates fits the question?), not a generation problem (write valid SPARQL from scratch). Matching is solved with embedding similarity — embed the question, compare against pre-written trigger questions for each template, pick the closest. This is deterministic and does not degrade with model quality.
 
-Early versions of this chatbot used an LLM to both classify questions (structural vs narrative) and select SPARQL queries. This was non-deterministic: the same question could route differently between runs, and the LLM sometimes hallucinated unresolvable template variables. Replacing LLM routing with embedding similarity is the planned improvement (see [Planned improvements](#planned-improvements)).
+Early versions of this chatbot used an LLM to both classify questions (structural vs narrative) and select SPARQL queries. This was non-deterministic: the same question could route differently between runs, and the LLM sometimes hallucinated unresolvable template variables. This has been replaced with the embedding-based `QueryIndex` (see `api/query_index.py`).
 
 ### Why two parallel paths
 
@@ -146,9 +146,10 @@ curl -s -X POST http://localhost:8000/ask \
 ```
 api/
   main.py            — FastAPI app (POST /ask, conversation history)
-  rag.py             — RAG pipeline: expand → retrieve → generate (both paths)
-  router.py          — Structural path: SPARQL query selection + result formatting
-  sparql_queries.py  — Named SPARQL query catalogue (10 templates) + run_query()
+  rag.py             — RAG pipeline: both paths always run → generate
+  router.py          — Structural path: SPARQL execution + result formatting
+  query_index.py     — QueryIndex singleton: trigger embeddings, named-entity detection
+  sparql_queries.py  — Named SPARQL query catalogue (11 templates) + run_query()
 widget/              — Embeddable chat widget
 evaluate/
   test_questions.yaml    — Eval questions (narrative + structural, annotated + pending)
@@ -169,9 +170,9 @@ python evaluate/eval_router.py --debug         # show route, SPARQL queries, con
 python evaluate/eval_router.py --verbose       # show full answers and missing terms on failure
 ```
 
-**Narrative retrieval** (7 annotated questions): consistently 7/7. Checks whether any expected URL appears in the top-k retrieved chunks.
+**Narrative retrieval** (14 annotated questions): consistently 14/14. Checks whether any expected URL appears in the top-k retrieved chunks.
 
-**Structural routing** (10 annotated questions): 7–9/10 depending on run (model non-determinism). Checks whether key entity names from the expected answer appear in the generated text. The `--debug` flag shows per-question what route was taken, which SPARQL queries were selected, and what context was built — useful for diagnosing failures.
+**Structural routing** (26 annotated questions): typically 25–26/26. Routing is fully deterministic; occasional failures are LLM non-determinism in answer generation (~1 per run at 50% key-term threshold). The `--debug` flag shows which SPARQL queries were selected, what context was built, and which entity URIs were passed to ChromaDB — useful for diagnosing failures.
 
 Questions marked `annotated: false` in `test_questions.yaml` are shown as `[PENDING]` with the chatbot's actual output, making it easy to review and annotate them.
 
@@ -183,58 +184,18 @@ python3 debug_rag.py "your question here" --no-generate  # retrieval only
 python3 query_debug.py "your question here" --top-k 10
 ```
 
-`debug_rag.py` shows the full pipeline: query classification, expanded variants, retrieved chunks with scores, the exact context string passed to the LLM, and the generated answer.
+`debug_rag.py` shows the full pipeline: expanded query variants, SPARQL queries selected, retrieved chunks with scores, the exact context string passed to the LLM, and the generated answer.
 
 `query_debug.py` shows retrieved chunks with similarity scores and source URLs — useful for diagnosing why a question isn't finding the right content.
 
-## Planned improvements
+## Known limitations and planned improvements
 
-**Embedding-based SPARQL routing** (replaces current LLM-based routing)
+**Query catalogue coverage**: the structural path can only answer questions that map to one of the 11 named queries. Questions about graph relationships not yet in the catalogue fall back to vector search. Candidates for addition: `workflows_by_status`, `tools_for_workflow`, `collections_by_license_type`.
 
-The current implementation still uses an LLM to select named queries and fill URI parameters. This is non-deterministic: the same question routes differently between runs. The planned replacement:
+**Vocabulary mismatch**: questions using acronyms ("SANE") or non-standard phrasing embed differently from documentation vocabulary. Query expansion mitigates this for the narrative path; title overrides help on the KB side.
 
-1. For each named query, define a set of trigger questions that it answers.
-2. At query time, embed the user question with nomic-embed-text and compute cosine similarity against all trigger questions.
-3. Run queries whose best trigger similarity exceeds a threshold — no LLM call needed.
-4. For parametric queries, fill URI parameters by embedding similarity against known entity names from `config.yaml` (tool names, workflow names, collection names, tadirah activity labels).
+**LLM non-determinism in generation**: routing is deterministic but the LLM occasionally omits expected terms from answers when multiple pieces of context compete (~1 failure per eval run at 50% key-term threshold). Not a routing problem.
 
-This makes routing fully deterministic and removes all LLM dependency from the retrieval decision.
+**Conversational search**: the current implementation is single-turn. Planned: history-aware query reformulation (rewrite follow-up questions as standalone queries before embedding), retrieval confidence scoring (ask a clarifying question rather than generating a weak answer), and proactive follow-up suggestions.
 
-**Expanded query catalogue**
-
-Each new named query covers an entire class of natural language questions. Candidates for addition:
-- `collections_by_license_type` — filter by CC0 / CC-BY / Public Domain specifically
-- `restricted_collections` — collections requiring institutional login
-- `workflows_by_status` — filter by Fully supported / Aspirational / Partially supported
-- `tools_for_workflow` — inverse of `workflows_by_tool`
-
-## Conversational search
-
-The current implementation is single-turn: each question is answered independently
-without memory of previous questions. The planned conversational extension adds
-three capabilities:
-
-**History-aware query reformulation** — before embedding, the question is rewritten
-as a standalone query using conversation history. This handles follow-up questions
-like "what about for radio?" which are meaningless without context.
-
-**Retrieval confidence scoring** — after retrieval, the system evaluates whether
-the returned chunks actually answer the question. If confidence is low, it asks
-the researcher a targeted clarifying question rather than generating a weak answer.
-
-**Proactive follow-up suggestions** — after a successful answer, the system
-suggests 2-3 related questions a researcher might naturally ask next. Particularly
-useful for researchers who don't yet know what the Media Suite can do.
-
-These are implemented as additions to `api/rag.py` and `api/main.py` — the
-architecture does not change, conversation history is passed as additional context
-with each request.
-
-
-## Known limitations
-
-**Model non-determinism**: the structural path currently uses an LLM to select SPARQL query templates. The same question can route differently between runs. The planned embedding-based routing (see above) eliminates this.
-
-**Vocabulary mismatch**: questions using acronyms ("SANE") or branded names ("VisXP") embed differently from the documentation vocabulary. Query expansion mitigates this for the narrative path.
-
-**Query catalogue coverage**: the structural path can only answer questions that map to one of the named queries. Questions about graph relationships not covered by the catalogue fall back to vector search.
+**Agentic RAG**: for complex multi-part questions a fixed pipeline has structural weaknesses — a single retrieval pass may not cover everything the question needs. Planned staged adoption: CRAG (add retrieval quality gate) → hybrid routing (standard for simple, ReAct for complex) → full ReAct agent. See [docs/agentic_rag.md](docs/agentic_rag.md) and the [project roadmap](https://github.com/roelandordelman/mediasuite-knowledge-base/blob/main/docs/roadmap.md).
