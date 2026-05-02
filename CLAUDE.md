@@ -60,8 +60,11 @@ Both paths always run for every question. The LLM is only used for query expansi
 4. Entity URIs from results also filter ChromaDB for supporting documentation chunks
 5. Returns empty when no queries exceed threshold (question is purely narrative)
 
+**Before retrieval** (when conversation history is present):
+- `_rewrite_as_standalone()` — if the question contains follow-up signals (pronouns, "the tool", "the first", etc.), the LLM rewrites it as a self-contained query using the last 3 conversation turns. The rewritten `retrieval_question` is used for embedding and SPARQL routing; the original `question` is used for generation so the answer reads naturally.
+
 **Narrative path** ("how do I annotate?", "what is the Media Suite?"):
-1. `_expand_query()` — llama3.1:8b generates 3 alternative phrasings
+1. `_expand_query()` — llama3.1:8b generates 3 alternative phrasings of `retrieval_question`
 2. `_retrieve()` — embed all variants, semantic search in ChromaDB (top_k×6 candidates)
 3. Priority slots: FAQ/Help/How-to chunks get 2 reserved result slots so tutorial volume can't crowd them out
 4. Dedup by title+section, then by URL

@@ -62,9 +62,27 @@ Output only the rephrased question, nothing else.
 
 Original question: {question}"""
 
+STANDALONE_REWRITE_PROMPT = """Given the conversation history below and a follow-up question, rewrite the follow-up as a fully self-contained question that can be understood without the conversation history.
+Keep it concise. Output only the rewritten question, nothing else. If the question is already self-contained, output it unchanged.
+
+Conversation history:
+{history_text}
+
+Follow-up question: {question}"""
+
 # If the best (lowest) narrative L2 distance is above this and the structural path
 # returned nothing, CRAG fires: reformulate the question and retry retrieval once.
 CRAG_RETRIEVAL_THRESHOLD = 0.75
+
+# Pronouns and demonstratives that suggest a question refers back to prior context.
+# Used as a fast pre-filter before calling the LLM for standalone rewrite.
+_FOLLOWUP_SIGNALS = frozenset([
+    "it", "its", "they", "them", "their", "theirs",
+    "this", "that", "these", "those",
+    "the tool", "the collection", "the workflow", "the service",
+    "the first", "the second", "the third", "the last",
+    "which one", "that one", "the one",
+])
 
 # JSON-encoded list fields that ChromaDB stores as strings
 _JSON_FIELDS = ("tags", "categories", "tools_mentioned", "collections_mentioned")
@@ -117,6 +135,43 @@ def _reformulate_query(question: str) -> str | None:
         return reformulated if reformulated and reformulated.lower() != question.lower() else None
     except Exception:
         return None
+
+
+def _rewrite_as_standalone(question: str, history: list[dict]) -> str:
+    """
+    If the question looks like a follow-up, rewrite it as a self-contained query.
+    Returns the rewritten question, or the original if rewrite is not needed or fails.
+    Only called when history is non-empty.
+    """
+    q_lower = question.lower()
+    # Fast path: skip LLM call if no follow-up signals are present
+    if not any(signal in q_lower for signal in _FOLLOWUP_SIGNALS):
+        return question
+
+    # Build a compact history snippet (last 3 turns max, role + content)
+    recent = history[-6:]  # up to 3 user+assistant pairs
+    history_text = "\n".join(
+        f"{m['role'].capitalize()}: {m['content'][:300]}"
+        for m in recent
+        if m.get("role") in ("user", "assistant") and m.get("content")
+    )
+    if not history_text:
+        return question
+
+    try:
+        response = ollama.chat(
+            model=GENERATE_MODEL,
+            messages=[{
+                "role": "user",
+                "content": STANDALONE_REWRITE_PROMPT.format(
+                    history_text=history_text, question=question
+                ),
+            }],
+        )
+        rewritten = response["message"]["content"].strip()
+        return rewritten if rewritten else question
+    except Exception:
+        return question
 
 
 def _deduplicate_by_url(
@@ -215,23 +270,30 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
     _, kg_cfg = _load_config()
     collection = _get_collection()
 
+    # History-aware rewrite: if this looks like a follow-up, resolve references
+    # before retrieval so embeddings match documentation vocabulary.
+    # Generation always uses the original question so the answer reads naturally.
+    retrieval_question = (
+        _rewrite_as_standalone(question, history) if history else question
+    )
+
     # Structural path — always attempt; no LLM involved in routing
     sparql_context = ""
     sparql_selections = []
     entity_uris = []
     if kg_cfg.get("fuseki_url"):
         sparql_context, entity_uris, sparql_selections = sparql_query_structural(
-            question, kg_cfg, EMBED_MODEL
+            retrieval_question, kg_cfg, EMBED_MODEL
         )
 
     # Narrative path — always run
-    queries = _expand_query(question)
+    queries = _expand_query(retrieval_question)
     docs, metas, distances = _retrieve(queries, collection, top_k)
 
     # CRAG: if structural returned nothing and narrative retrieval is weak, reformulate once
     crag_triggered = False
     if not sparql_context and (not distances or distances[0] > CRAG_RETRIEVAL_THRESHOLD):
-        reformulated = _reformulate_query(question)
+        reformulated = _reformulate_query(retrieval_question)
         if reformulated:
             crag_triggered = True
             r_docs, r_metas, r_dists = _retrieve([reformulated], collection, top_k)
@@ -289,7 +351,10 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
     if "I don't have information about that" in answer_text:
         result = {"answer": answer_text, "sources": []}
         if debug:
-            result["_debug"] = _build_debug(sparql_selections, sparql_context, entity_uris, crag_triggered)
+            result["_debug"] = _build_debug(
+                sparql_selections, sparql_context, entity_uris, crag_triggered,
+                retrieval_question if retrieval_question != question else None,
+            )
         return result
 
     seen = set()
@@ -301,18 +366,30 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
 
     result = {"answer": answer_text, "sources": unique_sources}
     if debug:
-        result["_debug"] = _build_debug(sparql_selections, sparql_context, entity_uris, crag_triggered)
+        result["_debug"] = _build_debug(
+            sparql_selections, sparql_context, entity_uris, crag_triggered,
+            retrieval_question if retrieval_question != question else None,
+        )
     return result
 
 
-def _build_debug(selections: list, sparql_context: str, entity_uris: list, crag_triggered: bool = False) -> dict:
+def _build_debug(
+    selections: list,
+    sparql_context: str,
+    entity_uris: list,
+    crag_triggered: bool = False,
+    rewritten_query: str | None = None,
+) -> dict:
     query_labels = [
         name if not params else f"{name}({', '.join(f'{k}=…{v[-20:]}' for k, v in params.items())})"
         for name, params in selections
     ]
-    return {
+    result = {
         "sparql_queries": query_labels,
         "sparql_context_preview": sparql_context[:400] if sparql_context else "(empty)",
         "entity_uris": entity_uris,
         "crag_triggered": crag_triggered,
     }
+    if rewritten_query:
+        result["rewritten_query"] = rewritten_query
+    return result
