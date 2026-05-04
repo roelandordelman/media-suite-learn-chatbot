@@ -6,6 +6,8 @@ retrieval, so vocabulary mismatches (e.g. "work with" vs "access") don't cause
 relevant chunks to be missed.
 """
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
 
