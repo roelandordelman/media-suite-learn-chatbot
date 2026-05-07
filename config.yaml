@@ -80,6 +80,11 @@ knowledge_graph:
       entity_uri: "https://mediasuite.clariah.nl/vocab#ReflexivityTool"
       tadirah_activities:
         - "https://vocabs.dariah.eu/tadirah/defining"
+    "Ask Media Suite":
+      entity_uri: "https://mediasuite.clariah.nl/vocab#AskMediaSuite"
+      tadirah_activities:
+        - "https://vocabs.dariah.eu/tadirah/informationRetrieval"
+        - "https://vocabs.dariah.eu/tadirah/browsing"
 
   # Collection name → entity URI.
   # Sourced from mediasuite-knowledge-base/config.yaml (graph.collection_entities).
