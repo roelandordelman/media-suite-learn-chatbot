@@ -11,6 +11,7 @@ rag:
   min_body_chars: 150
   crag_retrieval_threshold: 0.75
   priority_slots: 2
+  query_index_threshold: 0.60
 
 knowledge_graph:
   fuseki_url: http://localhost:3030

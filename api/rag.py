@@ -283,8 +283,9 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
     effective_top_k    = rag_cfg.get("top_k", top_k)
     max_distance       = rag_cfg.get("max_distance", MAX_DISTANCE)
     min_body_chars     = rag_cfg.get("min_body_chars", MIN_BODY_CHARS)
-    crag_threshold     = rag_cfg.get("crag_retrieval_threshold", CRAG_RETRIEVAL_THRESHOLD)
-    priority_slots     = rag_cfg.get("priority_slots", PRIORITY_SLOTS)
+    crag_threshold        = rag_cfg.get("crag_retrieval_threshold", CRAG_RETRIEVAL_THRESHOLD)
+    priority_slots        = rag_cfg.get("priority_slots", PRIORITY_SLOTS)
+    query_index_threshold = rag_cfg.get("query_index_threshold", 0.60)
 
     # History-aware rewrite: if this looks like a follow-up, resolve references
     # before retrieval so embeddings match documentation vocabulary.
@@ -299,7 +300,7 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
     entity_uris = []
     if kg_cfg.get("fuseki_url"):
         sparql_context, entity_uris, sparql_selections = sparql_query_structural(
-            retrieval_question, kg_cfg, embed_model
+            retrieval_question, kg_cfg, embed_model, threshold=query_index_threshold
         )
 
     # Narrative path — always run

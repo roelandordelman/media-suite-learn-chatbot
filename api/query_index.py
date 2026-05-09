@@ -13,8 +13,12 @@ See README — Design decisions for the rationale.
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import ollama
+
+logger = logging.getLogger(__name__)
 
 from api.sparql_queries import GRAPH, QUERIES, run_query, tadirah_uri
 
@@ -243,7 +247,7 @@ class QueryIndex:
                         pairs.append((alias, uri))
                 self._embed_pairs("workflow", pairs, embed_model)
             except Exception:
-                pass
+                logger.warning("Failed to fetch workflows from Fuseki during index build", exc_info=True)
 
         # Activity labels
         labels = list(ACTIVITY_LABELS.keys())
@@ -377,14 +381,13 @@ class QueryIndex:
 
     def _closest(self, q_emb: np.ndarray, q_norm: float, entities: list) -> tuple:
         """Return (label, uri, sim) for the entity most similar to q_emb."""
-        best_sim = -1.0
-        best: tuple = ("", "", -1.0)
-        for label, uri, emb in entities:
-            sim = float(np.dot(emb, q_emb) / max(float(np.linalg.norm(emb)) * q_norm, 1e-10))
-            if sim > best_sim:
-                best_sim = sim
-                best = (label, uri, sim)
-        return best
+        labels = [e[0] for e in entities]
+        uris   = [e[1] for e in entities]
+        embs   = np.array([e[2] for e in entities])
+        norms  = np.linalg.norm(embs, axis=1)
+        sims   = (embs @ q_emb) / np.maximum(norms * q_norm, 1e-10)
+        best_i = int(np.argmax(sims))
+        return labels[best_i], uris[best_i], float(sims[best_i])
 
 
 # ---------------------------------------------------------------------------

@@ -9,11 +9,14 @@ See api/query_index.py for the trigger question catalogue and QueryIndex class.
 """
 
 import json
+import logging
 
 import ollama
 import chromadb
 
 from api.sparql_queries import GRAPH, QUERIES, run_query
+
+logger = logging.getLogger(__name__)
 
 
 _JSON_META_FIELDS = ("tags", "categories", "tools_mentioned", "collections_mentioned")
@@ -24,7 +27,7 @@ _JSON_META_FIELDS = ("tags", "categories", "tools_mentioned", "collections_menti
 # ---------------------------------------------------------------------------
 
 def sparql_query_structural(
-    question: str, kg_cfg: dict, embed_model: str
+    question: str, kg_cfg: dict, embed_model: str, threshold: float = 0.60
 ) -> tuple[str, list[str], list[tuple]]:
     """
     Select and run named SPARQL queries using embedding similarity.
@@ -44,9 +47,13 @@ def sparql_query_structural(
 
     index = get_index()
     if not index._built:
-        index.build(kg_cfg, embed_model)
+        try:
+            index.build(kg_cfg, embed_model)
+        except Exception:
+            logger.warning("QueryIndex build failed; structural path disabled for this request", exc_info=True)
+            return "", [], []
 
-    selections = index.select(question, embed_model)
+    selections = index.select(question, embed_model, threshold=threshold)
     if not selections:
         return "", [], []
 
