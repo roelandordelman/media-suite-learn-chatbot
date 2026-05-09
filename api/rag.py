@@ -9,26 +9,26 @@ relevant chunks to be missed.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import ollama
 import chromadb
 import yaml
 
+logger = logging.getLogger(__name__)
+
 CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
 
+# Defaults — overridden at runtime by the [rag] section in config.yaml.
+# These also serve as the values used by debug_rag.py / query_debug.py.
 EMBED_MODEL = "nomic-embed-text"
 GENERATE_MODEL = "llama3.1:8b"
 TOP_K = 5
-
-# Chunks with L2 distance above this are considered too dissimilar to be useful.
-# Lower = stricter. Run query_debug.py to see typical scores for your queries
-# and tune this value accordingly.
 MAX_DISTANCE = 1.0
-
-# Chunks whose body (text after the first context-prefix line) is shorter than this
-# are header/stub chunks with no real content and are skipped during retrieval.
 MIN_BODY_CHARS = 150
+CRAG_RETRIEVAL_THRESHOLD = 0.75
+PRIORITY_SLOTS = 2
 
 NO_ANSWER_RESPONSE = (
     "I don't have information about that in the Media Suite documentation. "
@@ -74,7 +74,7 @@ Follow-up question: {question}"""
 
 # If the best (lowest) narrative L2 distance is above this and the structural path
 # returned nothing, CRAG fires: reformulate the question and retry retrieval once.
-CRAG_RETRIEVAL_THRESHOLD = 0.75
+# Overridable via config.yaml [rag] section.
 
 # Pronouns and demonstratives that suggest a question refers back to prior context.
 # Used as a fast pre-filter before calling the LLM for standalone rewrite.
@@ -90,9 +90,9 @@ _FOLLOWUP_SIGNALS = frozenset([
 _JSON_FIELDS = ("tags", "categories", "tools_mentioned", "collections_mentioned")
 
 
-def _load_config() -> dict:
+def _load_config() -> tuple[dict, dict, dict]:
     cfg = yaml.safe_load(CONFIG_PATH.read_text())
-    return cfg["knowledge_base"], cfg.get("knowledge_graph", {})
+    return cfg["knowledge_base"], cfg.get("knowledge_graph", {}), cfg.get("rag", {})
 
 
 def _decode_meta(meta: dict) -> dict:
@@ -103,15 +103,15 @@ def _decode_meta(meta: dict) -> dict:
 
 
 def _get_collection() -> chromadb.Collection:
-    cfg, _ = _load_config()
+    cfg, *_ = _load_config()
     client = chromadb.HttpClient(host=cfg["chroma_host"], port=cfg["chroma_port"])
     return client.get_collection(cfg["collection_name"])
 
 
-def _expand_query(question: str) -> list[str]:
+def _expand_query(question: str, model: str = GENERATE_MODEL) -> list[str]:
     """Return the original question plus LLM-generated alternative phrasings."""
     response = ollama.chat(
-        model=GENERATE_MODEL,
+        model=model,
         messages=[{"role": "user", "content": EXPANSION_PROMPT.format(question=question)}],
     )
     alternatives = [
@@ -123,23 +123,20 @@ def _expand_query(question: str) -> list[str]:
     return [question] + alternatives[:3]
 
 
-def _reformulate_query(question: str) -> str | None:
-    """
-    Ask the LLM to rephrase the question with different vocabulary.
-    Returns None if the LLM fails or returns the same question.
-    """
+def _reformulate_query(question: str, model: str = GENERATE_MODEL) -> str | None:
     try:
         response = ollama.chat(
-            model=GENERATE_MODEL,
+            model=model,
             messages=[{"role": "user", "content": REFORMULATION_PROMPT.format(question=question)}],
         )
         reformulated = response["message"]["content"].strip()
         return reformulated if reformulated and reformulated.lower() != question.lower() else None
     except Exception:
+        logger.warning("Query reformulation failed", exc_info=True)
         return None
 
 
-def _rewrite_as_standalone(question: str, history: list[dict]) -> str:
+def _rewrite_as_standalone(question: str, history: list[dict], model: str = GENERATE_MODEL) -> str:
     """
     If the question looks like a follow-up, rewrite it as a self-contained query.
     Returns the rewritten question, or the original if rewrite is not needed or fails.
@@ -162,7 +159,7 @@ def _rewrite_as_standalone(question: str, history: list[dict]) -> str:
 
     try:
         response = ollama.chat(
-            model=GENERATE_MODEL,
+            model=model,
             messages=[{
                 "role": "user",
                 "content": STANDALONE_REWRITE_PROMPT.format(
@@ -173,20 +170,23 @@ def _rewrite_as_standalone(question: str, history: list[dict]) -> str:
         rewritten = response["message"]["content"].strip()
         return rewritten if rewritten else question
     except Exception:
+        logger.warning("Standalone rewrite failed", exc_info=True)
         return question
 
 
-def _deduplicate_by_url(
+def _deduplicate(
     docs: list[str], metadatas: list[dict], distances: list[float]
 ) -> tuple[list[str], list[dict], list[float]]:
-    """Keep only the highest-scoring (lowest-distance) chunk per source URL."""
-    seen: dict[str, tuple[str, dict, float]] = {}
+    """Keep only the highest-scoring (lowest-distance) chunk per (url, section) pair."""
+    seen: dict[tuple, tuple] = {}
     for doc, meta, dist in zip(docs, metadatas, distances):
-        url = meta["url"]
-        if url not in seen or dist < seen[url][2]:
-            seen[url] = (doc, meta, dist)
+        key = (meta["url"], meta.get("section", ""))
+        if key not in seen or dist < seen[key][2]:
+            seen[key] = (doc, meta, dist)
     deduped = sorted(seen.values(), key=lambda x: x[2])
-    docs_out, metas_out, dists_out = zip(*deduped) if deduped else ([], [], [])
+    if not deduped:
+        return [], [], []
+    docs_out, metas_out, dists_out = zip(*deduped)
     return list(docs_out), list(metas_out), list(dists_out)
 
 
@@ -195,12 +195,18 @@ def _deduplicate_by_url(
 # "how do I" questions — both are authoritative and tend to have lower semantic
 # similarity scores than tutorial content despite being more relevant.
 _PRIORITY_TYPES = {"FAQ", "Help", "How-to Guide"}
-PRIORITY_SLOTS = 2  # of top_k results reserved for priority-type chunks
 
 
-def _retrieve(queries: list[str], collection: chromadb.Collection, top_k: int) -> tuple[list, list, list]:
-    """Embed all queries, return top_k results with PRIORITY_SLOTS reserved for FAQ/Help/How-to."""
-    embeddings = ollama.embed(model=EMBED_MODEL, input=queries)["embeddings"]
+def _retrieve(
+    queries: list[str],
+    collection: chromadb.Collection,
+    top_k: int,
+    embed_model: str = EMBED_MODEL,
+    min_body_chars: int = MIN_BODY_CHARS,
+    priority_slots: int = PRIORITY_SLOTS,
+) -> tuple[list, list, list]:
+    """Embed all queries, return top_k results with priority_slots reserved for FAQ/Help/How-to."""
+    embeddings = ollama.embed(model=embed_model, input=queries)["embeddings"]
 
     def _collect(results, store):
         for doc, meta, dist in zip(
@@ -209,7 +215,7 @@ def _retrieve(queries: list[str], collection: chromadb.Collection, top_k: int) -
             results["distances"][0],
         ):
             body = "\n".join(doc.splitlines()[1:]).strip()
-            if len(body) < MIN_BODY_CHARS:
+            if len(body) < min_body_chars:
                 continue
             meta = _decode_meta(meta)
             # Dedup by title+section — collapses tool-tutorial/subject-tutorial duplicates
@@ -231,29 +237,28 @@ def _retrieve(queries: list[str], collection: chromadb.Collection, top_k: int) -
     priority: dict[str, tuple] = {}
     priority_results = collection.query(
         query_embeddings=[embeddings[0]],
-        n_results=PRIORITY_SLOTS * 4,
+        n_results=priority_slots * 4,
         where={"content_type": {"$in": list(_PRIORITY_TYPES)}},
         include=["documents", "metadatas", "distances"],
     )
     _collect(priority_results, priority)
 
-    # Build final list: top PRIORITY_SLOTS from priority pool +
-    # top (top_k - PRIORITY_SLOTS) from semantic pool (excluding already-included URLs)
-    priority_ranked = sorted(priority.values(), key=lambda x: x[2])[:PRIORITY_SLOTS]
+    # Build final list: top priority_slots from priority pool +
+    # top (top_k - priority_slots) from semantic pool (excluding already-included URLs)
+    priority_ranked = sorted(priority.values(), key=lambda x: x[2])[:priority_slots]
     priority_urls = {r[1]["url"] for r in priority_ranked}
 
     semantic_ranked = [
         r for r in sorted(semantic.values(), key=lambda x: x[2])
         if r[1]["url"] not in priority_urls
-    ][: top_k - PRIORITY_SLOTS]
+    ][: top_k - priority_slots]
 
     combined = priority_ranked + semantic_ranked
     docs  = [r[0] for r in combined]
     metas = [r[1] for r in combined]
     dists = [r[2] for r in combined]
 
-    docs, metas, dists = _deduplicate_by_url(docs, metas, dists)
-    return docs, metas, dists
+    return _deduplicate(docs, metas, dists)
 
 
 def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug: bool = False) -> dict:
@@ -269,14 +274,23 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
     """
     from api.router import sparql_query_structural, retrieve_by_entity_uris
 
-    _, kg_cfg = _load_config()
+    kb_cfg, kg_cfg, rag_cfg = _load_config()
     collection = _get_collection()
+
+    # Runtime overrides from config.yaml [rag] section; fall back to module defaults
+    embed_model    = rag_cfg.get("embed_model", EMBED_MODEL)
+    generate_model = rag_cfg.get("generate_model", GENERATE_MODEL)
+    effective_top_k    = rag_cfg.get("top_k", top_k)
+    max_distance       = rag_cfg.get("max_distance", MAX_DISTANCE)
+    min_body_chars     = rag_cfg.get("min_body_chars", MIN_BODY_CHARS)
+    crag_threshold     = rag_cfg.get("crag_retrieval_threshold", CRAG_RETRIEVAL_THRESHOLD)
+    priority_slots     = rag_cfg.get("priority_slots", PRIORITY_SLOTS)
 
     # History-aware rewrite: if this looks like a follow-up, resolve references
     # before retrieval so embeddings match documentation vocabulary.
     # Generation always uses the original question so the answer reads naturally.
     retrieval_question = (
-        _rewrite_as_standalone(question, history) if history else question
+        _rewrite_as_standalone(question, history, generate_model) if history else question
     )
 
     # Structural path — always attempt; no LLM involved in routing
@@ -285,29 +299,34 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
     entity_uris = []
     if kg_cfg.get("fuseki_url"):
         sparql_context, entity_uris, sparql_selections = sparql_query_structural(
-            retrieval_question, kg_cfg, EMBED_MODEL
+            retrieval_question, kg_cfg, embed_model
         )
 
     # Narrative path — always run
-    queries = _expand_query(retrieval_question)
-    docs, metas, distances = _retrieve(queries, collection, top_k)
+    queries = _expand_query(retrieval_question, generate_model)
+    docs, metas, distances = _retrieve(
+        queries, collection, effective_top_k, embed_model, min_body_chars, priority_slots
+    )
 
     # CRAG: if structural returned nothing and narrative retrieval is weak, reformulate once
     crag_triggered = False
-    if not sparql_context and (not distances or distances[0] > CRAG_RETRIEVAL_THRESHOLD):
-        reformulated = _reformulate_query(retrieval_question)
+    if not sparql_context and (not distances or distances[0] > crag_threshold):
+        reformulated = _reformulate_query(retrieval_question, generate_model)
         if reformulated:
             crag_triggered = True
-            r_docs, r_metas, r_dists = _retrieve([reformulated], collection, top_k)
-            # Merge: best-scoring chunk per URL wins
-            url_map: dict[str, tuple] = {
-                m["url"]: (d, m, di) for d, m, di in zip(docs, metas, distances)
+            r_docs, r_metas, r_dists = _retrieve(
+                [reformulated], collection, effective_top_k, embed_model, min_body_chars, priority_slots
+            )
+            # Merge: best-scoring chunk per (url, section) pair wins
+            url_map: dict[tuple, tuple] = {
+                (m["url"], m.get("section", "")): (d, m, di)
+                for d, m, di in zip(docs, metas, distances)
             }
             for d, m, dist in zip(r_docs, r_metas, r_dists):
-                url = m["url"]
-                if url not in url_map or dist < url_map[url][2]:
-                    url_map[url] = (d, m, dist)
-            merged = sorted(url_map.values(), key=lambda x: x[2])[:top_k]
+                key = (m["url"], m.get("section", ""))
+                if key not in url_map or dist < url_map[key][2]:
+                    url_map[key] = (d, m, dist)
+            merged = sorted(url_map.values(), key=lambda x: x[2])[:effective_top_k]
             docs      = [x[0] for x in merged]
             metas     = [x[1] for x in merged]
             distances = [x[2] for x in merged]
@@ -315,17 +334,17 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
     # If structural found entity URIs, merge entity-specific chunks into results
     if entity_uris:
         entity_docs, entity_metas, entity_dists = retrieve_by_entity_uris(
-            question, entity_uris, collection, EMBED_MODEL, top_k
+            question, entity_uris, collection, embed_model, effective_top_k
         )
-        existing_urls = {m["url"] for m in metas}
+        existing_keys = {(m["url"], m.get("section", "")) for m in metas}
         for d, m, dist in zip(entity_docs, entity_metas, entity_dists):
-            if m["url"] not in existing_urls:
+            if (m["url"], m.get("section", "")) not in existing_keys:
                 docs.append(d)
                 metas.append(m)
                 distances.append(dist)
 
     # Bail out only if neither path returned anything useful
-    if not sparql_context and (not distances or distances[0] > MAX_DISTANCE):
+    if not sparql_context and (not distances or distances[0] > max_distance):
         return {"answer": NO_ANSWER_RESPONSE, "sources": []}
 
     # Build context: SPARQL facts first, then chunk text
@@ -346,7 +365,7 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
         {"role": "user", "content": _USER_PROMPT_TEMPLATE.format(context=context, question=question)},
     ]
 
-    response = ollama.chat(model=GENERATE_MODEL, messages=messages)
+    response = ollama.chat(model=generate_model, messages=messages)
     answer_text = response["message"]["content"]
 
     # Don't return sources if the LLM couldn't answer from the context
