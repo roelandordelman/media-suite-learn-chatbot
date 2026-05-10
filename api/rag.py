@@ -35,7 +35,15 @@ NO_ANSWER_RESPONSE = (
     "You can browse the full documentation at https://mediasuite.clariah.nl/documentation."
 )
 
-_SYSTEM_PROMPT_BASE = "You are a Media Suite documentation assistant. Answer using ONLY the provided context, which may include documentation text and knowledge graph facts. Do not use outside knowledge."
+_SYSTEM_PROMPT_BASE = (
+    "You are a Media Suite assistant for CLARIAH researchers. "
+    "Answer using ONLY the provided context, which may include: "
+    "(1) Media Suite documentation text, "
+    "(2) knowledge graph facts about tools, collections, and workflows, "
+    "(3) wiki background information about persons, productions, and topics "
+    "from Dutch media history (Beeld & Geluid Wiki). "
+    "Do not use outside knowledge."
+)
 
 _USER_PROMPT_TEMPLATE = """\
 CONTEXT:
@@ -44,8 +52,9 @@ CONTEXT:
 QUESTION: {question}
 
 INSTRUCTIONS:
-- Answer using ONLY the CONTEXT above (documentation text and/or knowledge graph facts).
-- Knowledge graph facts (marked [Knowledge graph facts]) are authoritative — use them directly to answer structural questions about tools, collections, workflows, and access rights.
+- Answer using ONLY the CONTEXT above.
+- Knowledge graph facts (marked [Knowledge graph facts]) are authoritative for questions about Media Suite tools, collections, and workflows.
+- Wiki background (marked [Achtergrond — Beeld & Geluid Wiki]) provides context about Dutch media history persons and productions. Note that wiki content may be outdated.
 - If the context does not contain a clear answer, write ONLY this line: "I don't have information about that in the Media Suite documentation."
 - Do not speculate or add information from outside the context.
 - End your answer with the source URLs from the context chunks you used (if any).
@@ -90,9 +99,14 @@ _FOLLOWUP_SIGNALS = frozenset([
 _JSON_FIELDS = ("tags", "categories", "tools_mentioned", "collections_mentioned")
 
 
-def _load_config() -> tuple[dict, dict, dict]:
+def _load_config() -> tuple[dict, dict, dict, dict]:
     cfg = yaml.safe_load(CONFIG_PATH.read_text())
-    return cfg["knowledge_base"], cfg.get("knowledge_graph", {}), cfg.get("rag", {})
+    return (
+        cfg["knowledge_base"],
+        cfg.get("knowledge_graph", {}),
+        cfg.get("rag", {}),
+        cfg.get("wiki_api", {}),
+    )
 
 
 def _decode_meta(meta: dict) -> dict:
@@ -266,15 +280,17 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
     Return {"answer": str, "sources": [{"title": str, "url": str}]}.
     When debug=True, also include "_debug": {"sparql_queries", "sparql_context_preview", "entity_uris"}.
 
-    Both retrieval paths always run:
+    Three retrieval paths always run:
     - Structural: embedding similarity selects SPARQL queries → Fuseki returns facts.
                   Returns empty when no queries exceed the similarity threshold.
     - Narrative:  LLM expands the question → embed → ChromaDB semantic search.
-    The LLM generates an answer from whatever context both paths returned.
+    - Wiki:       semantic search against the Beeld & Geluid Wiki (via wiki REST API).
+                  Returns empty when the wiki API is down or no relevant results found.
+    The LLM generates an answer from whatever context all three paths returned.
     """
     from api.router import sparql_query_structural, retrieve_by_entity_uris
 
-    kb_cfg, kg_cfg, rag_cfg = _load_config()
+    kb_cfg, kg_cfg, rag_cfg, wiki_cfg = _load_config()
     collection = _get_collection()
 
     # Runtime overrides from config.yaml [rag] section; fall back to module defaults
@@ -302,6 +318,19 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
         sparql_context, entity_uris, sparql_selections = sparql_query_structural(
             retrieval_question, kg_cfg, embed_model, threshold=query_index_threshold
         )
+
+    # Wiki path — semantic search against the Beeld & Geluid Wiki (optional)
+    wiki_context = ""
+    wiki_results: list[dict] = []
+    if wiki_cfg.get("url"):
+        from api.wiki_client import retrieve_wiki, format_wiki_context
+        wiki_results = retrieve_wiki(
+            wiki_cfg["url"],
+            retrieval_question,
+            limit=wiki_cfg.get("top_k", 3),
+            min_score=wiki_cfg.get("min_score", 0.70),
+        )
+        wiki_context = format_wiki_context(wiki_results)
 
     # Narrative path — always run
     queries = _expand_query(retrieval_question, generate_model)
@@ -344,14 +373,16 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
                 metas.append(m)
                 distances.append(dist)
 
-    # Bail out only if neither path returned anything useful
-    if not sparql_context and (not distances or distances[0] > max_distance):
+    # Bail out only if all three paths returned nothing useful
+    if not sparql_context and not wiki_context and (not distances or distances[0] > max_distance):
         return {"answer": NO_ANSWER_RESPONSE, "sources": []}
 
-    # Build context: SPARQL facts first, then chunk text
+    # Build context: SPARQL facts first, then wiki background, then chunk text
     context_parts = []
     if sparql_context:
         context_parts.append(f"[Knowledge graph facts]\n{sparql_context}")
+    if wiki_context:
+        context_parts.append(wiki_context)
     if docs:
         chunk_text = "\n\n---\n\n".join(
             f"[{m['content_type']}] {m['title']}{(' — ' + m['section']) if m.get('section') else ''}\nURL: {m['url']}\n\n{doc}"
@@ -376,6 +407,7 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
             result["_debug"] = _build_debug(
                 sparql_selections, sparql_context, entity_uris, crag_triggered,
                 retrieval_question if retrieval_question != question else None,
+                wiki_results,
             )
         return result
 
@@ -385,12 +417,17 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
         if m.get("url") and m["url"] not in seen:
             seen.add(m["url"])
             unique_sources.append({"title": m["title"], "url": m["url"]})
+    for r in wiki_results:
+        if r.get("url") and r["url"] not in seen:
+            seen.add(r["url"])
+            unique_sources.append({"title": r["title"], "url": r["url"]})
 
     result = {"answer": answer_text, "sources": unique_sources}
     if debug:
         result["_debug"] = _build_debug(
             sparql_selections, sparql_context, entity_uris, crag_triggered,
             retrieval_question if retrieval_question != question else None,
+            wiki_results,
         )
     return result
 
@@ -401,6 +438,7 @@ def _build_debug(
     entity_uris: list,
     crag_triggered: bool = False,
     rewritten_query: str | None = None,
+    wiki_results: list | None = None,
 ) -> dict:
     query_labels = [
         name if not params else f"{name}({', '.join(f'{k}=…{v[-20:]}' for k, v in params.items())})"
@@ -411,6 +449,8 @@ def _build_debug(
         "sparql_context_preview": sparql_context[:400] if sparql_context else "(empty)",
         "entity_uris": entity_uris,
         "crag_triggered": crag_triggered,
+        "wiki_hits": len(wiki_results) if wiki_results else 0,
+        "wiki_titles": [r.get("title") for r in (wiki_results or [])],
     }
     if rewritten_query:
         result["rewritten_query"] = rewritten_query
