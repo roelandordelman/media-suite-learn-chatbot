@@ -319,18 +319,19 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
             retrieval_question, kg_cfg, embed_model, threshold=query_index_threshold
         )
 
-    # Wiki path — semantic search against the Beeld & Geluid Wiki (optional)
+    # Wiki path — dual-path retrieval via wiki agent /ask endpoint (optional)
     wiki_context = ""
-    wiki_results: list[dict] = []
+    wiki_sources: list[dict] = []
     if wiki_cfg.get("url"):
-        from api.wiki_client import retrieve_wiki, format_wiki_context
-        wiki_results = retrieve_wiki(
+        from api.wiki_client import retrieve_wiki
+        wiki_response = retrieve_wiki(
             wiki_cfg["url"],
             retrieval_question,
-            limit=wiki_cfg.get("top_k", 3),
+            top_k=wiki_cfg.get("top_k", 3),
             min_score=wiki_cfg.get("min_score", 0.70),
         )
-        wiki_context = format_wiki_context(wiki_results)
+        wiki_context = wiki_response.get("context", "")
+        wiki_sources = wiki_response.get("sources", [])
 
     # Narrative path — always run
     queries = _expand_query(retrieval_question, generate_model)
@@ -407,7 +408,7 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
             result["_debug"] = _build_debug(
                 sparql_selections, sparql_context, entity_uris, crag_triggered,
                 retrieval_question if retrieval_question != question else None,
-                wiki_results,
+                wiki_sources,
             )
         return result
 
@@ -417,17 +418,17 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
         if m.get("url") and m["url"] not in seen:
             seen.add(m["url"])
             unique_sources.append({"title": m["title"], "url": m["url"]})
-    for r in wiki_results:
+    for r in wiki_sources:
         if r.get("url") and r["url"] not in seen:
             seen.add(r["url"])
-            unique_sources.append({"title": r["title"], "url": r["url"]})
+            unique_sources.append({"title": r.get("title", ""), "url": r["url"]})
 
     result = {"answer": answer_text, "sources": unique_sources}
     if debug:
         result["_debug"] = _build_debug(
             sparql_selections, sparql_context, entity_uris, crag_triggered,
             retrieval_question if retrieval_question != question else None,
-            wiki_results,
+            wiki_sources,
         )
     return result
 
@@ -438,7 +439,7 @@ def _build_debug(
     entity_uris: list,
     crag_triggered: bool = False,
     rewritten_query: str | None = None,
-    wiki_results: list | None = None,
+    wiki_sources: list | None = None,
 ) -> dict:
     query_labels = [
         name if not params else f"{name}({', '.join(f'{k}=…{v[-20:]}' for k, v in params.items())})"
@@ -449,8 +450,7 @@ def _build_debug(
         "sparql_context_preview": sparql_context[:400] if sparql_context else "(empty)",
         "entity_uris": entity_uris,
         "crag_triggered": crag_triggered,
-        "wiki_hits": len(wiki_results) if wiki_results else 0,
-        "wiki_titles": [r.get("title") for r in (wiki_results or [])],
+        "wiki_sources": len(wiki_sources) if wiki_sources else 0,
     }
     if rewritten_query:
         result["rewritten_query"] = rewritten_query
