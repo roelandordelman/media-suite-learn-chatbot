@@ -1,12 +1,12 @@
 # Ask Media Suite
 
-A RAG chatbot for researchers using the [CLARIAH Media Suite](https://mediasuite.clariah.nl). Ask questions in natural language and get answers grounded in the official Help, How-to, FAQ, Tutorial and Glossary content, with direct links back to the relevant pages.
+A RAG chatbot for researchers using the [CLARIAH Media Suite](https://mediasuite.clariah.nl). Ask questions in natural language and get answers grounded in the official Media Suite documentation and the Beeld & Geluid Wiki, with direct links back to source pages.
 
 The widget is intended to be embedded on the [Media Suite Community site](https://roelandordelman.github.io/media-suite-community/).
 
 ## Architecture
 
-The chatbot routes questions to one of two retrieval paths depending on question type.
+The chatbot runs three retrieval paths in parallel for every question.
 
 ```mermaid
 flowchart TD
@@ -15,13 +15,18 @@ flowchart TD
         A2[vocab TTL files] -->|build_graph.py| KG[(Apache Jena Fuseki\nHTTP :3030)]
     end
 
+    subgraph WA["mediasuite-wiki-agent (separate repo)"]
+        W[B&G Wiki\n24k articles] -->|harvest + embed\nmultilingual-e5-large| MV[(Milvus\nwiki index)]
+        W -->|harvest + RDF| KG
+    end
+
     subgraph Chatbot["media-suite-learn-chatbot (this repo)"]
-        D[User question] --> NP & SP
+        D[User question] --> NP & SP & WP
 
         subgraph NP["Narrative path"]
             N1[Query expansion\n3 phrasings · LLM] --> N2[Embed queries\nnomic-embed-text]
             N2 -->|vector search| B
-            B -->|top-k chunks| N3[Chunk context]
+            B -->|top-k chunks| N3[Doc context]
         end
 
         subgraph SP["Structural path"]
@@ -30,24 +35,36 @@ flowchart TD
             KG -->|structured facts| S3[KG context]
         end
 
-        N3 & S3 --> GEN[Generate answer\nLLM]
+        subgraph WP["Wiki path"]
+            WQ[Query] -->|REST API :8002| MV
+            MV -->|top-k excerpts ≥ 0.70| W3[Wiki context]
+        end
+
+        N3 & S3 & W3 --> GEN[Generate answer\nLLM]
         GEN --> ANS[Answer + source URLs]
-        ANS --> W[JS widget\nchatbot.js]
+        ANS --> WGT[JS widget\nchatbot.js]
     end
 
-    W -->|embedded via script tag| J[Media Suite\nCommunity site]
+    WGT -->|embedded via script tag| J[Media Suite\nCommunity site]
 ```
 
-Both paths run in parallel for every question. The LLM is used only for query expansion and answer generation — not for routing decisions.
+All three paths run in parallel. The LLM is used only for query expansion and answer generation — not for routing. Wiki results are filtered by a similarity threshold (0.70) before being added to context, so documentation-only questions pay no penalty.
+
+- **Structural path** answers precise questions about Media Suite tools, collections, and workflows using named SPARQL queries against Fuseki — deterministic, no LLM in routing.
+- **Narrative path** answers how-to and explanatory questions using semantic search against the ChromaDB documentation index.
+- **Wiki path** provides biographical, production, and genre background from the Beeld & Geluid Wiki when the question is about Dutch media history persons or topics.
 
 ## Stack
 
 | Layer | Technology |
 |---|---|
 | Generation, query expansion | llama3.1:8b via Ollama (local) |
-| Embeddings | nomic-embed-text via Ollama (local) |
-| Vector store | ChromaDB HTTP server — built in mediasuite-knowledge-base |
-| Knowledge graph | Apache Jena Fuseki — built in mediasuite-knowledge-base |
+| Embeddings (docs + routing) | nomic-embed-text via Ollama (local) |
+| Embeddings (wiki) | multilingual-e5-large-instruct via sentence-transformers (in wiki agent) |
+| Vector store (docs) | ChromaDB HTTP server — built in mediasuite-knowledge-base |
+| Vector store (wiki) | Milvus Lite — built in mediasuite-wiki-agent |
+| Knowledge graph | Apache Jena Fuseki — shared by both knowledge-base and wiki-agent |
+| Wiki retrieval | mediasuite-wiki-agent REST API (port 8002) |
 | Backend | FastAPI + uvicorn |
 | Frontend | Vanilla JS widget, no framework |
 
@@ -81,12 +98,17 @@ Running both paths in parallel removes this failure mode. The LLM generates an a
 
 ## Prerequisites
 
-This repo is the **application layer only**. All ingestion, embedding, and knowledge graph infrastructure lives in [mediasuite-knowledge-base](https://github.com/roelandordelman/mediasuite-knowledge-base).
+This repo is the **application layer only**. Infrastructure lives in two separate repos:
 
-Before running this chatbot:
-
+**Required — Media Suite documentation KB:**
 1. Clone and set up [mediasuite-knowledge-base](https://github.com/roelandordelman/mediasuite-knowledge-base) and follow its README to ingest the documentation, build the ChromaDB index, and load the knowledge graph into Fuseki.
-2. Start the ChromaDB HTTP server (port 8001) and Apache Jena Fuseki (port 3030) from that repo.
+2. Start ChromaDB HTTP server (port 8001) and Apache Jena Fuseki (port 3030) from that repo.
+
+**Optional — Beeld & Geluid Wiki:**
+3. Clone and set up [mediasuite-wiki-agent](https://github.com/roelandordelman/mediasuite-wiki-agent). Follow its README to run the harvest pipeline and build the Milvus index (one-time, takes several hours on first run).
+4. Start the wiki REST API: `python3.12 -m uvicorn api.serve:app --port 8002` from the wiki agent repo.
+
+If the wiki API is not running, the chatbot continues to operate from the other two paths — it degrades gracefully.
 
 ## Setup
 
@@ -105,7 +127,7 @@ ollama pull llama3.1:8b
 
 **3. Configure connections**
 
-`config.yaml` is pre-configured for local defaults. Edit if your ChromaDB or Fuseki run on different hosts or ports:
+`config.yaml` is pre-configured for local defaults. Edit if your services run on different hosts or ports:
 ```yaml
 knowledge_base:
   chroma_host: localhost
@@ -114,6 +136,11 @@ knowledge_base:
 knowledge_graph:
   fuseki_url: http://localhost:3030
   dataset: mediasuite
+
+wiki_api:
+  url: http://localhost:8002   # remove or leave missing to disable wiki retrieval
+  top_k: 3
+  min_score: 0.70
 ```
 
 **4. Start the API**
@@ -146,16 +173,17 @@ curl -s -X POST http://localhost:8000/ask \
 ```
 api/
   main.py            — FastAPI app (POST /ask, conversation history)
-  rag.py             — RAG pipeline: both paths always run → generate
+  rag.py             — RAG pipeline: all three paths always run → generate
   router.py          — Structural path: SPARQL execution + result formatting
   query_index.py     — QueryIndex singleton: trigger embeddings, named-entity detection
   sparql_queries.py  — Named SPARQL query catalogue (11 templates) + run_query()
+  wiki_client.py     — Wiki path: HTTP client for mediasuite-wiki-agent REST API
 widget/              — Embeddable chat widget
 evaluate/
   test_questions.yaml    — Eval questions (narrative + structural, annotated + pending)
   eval_retrieval.py      — Narrative retrieval eval (URL presence in top-k)
   eval_router.py         — Structural answer eval (key term scoring, debug mode)
-config.yaml          — ChromaDB + Fuseki config + entity/tool/collection mappings
+config.yaml          — ChromaDB + Fuseki + wiki_api config + entity/tool/collection mappings
 debug_rag.py         — Full pipeline debug CLI
 query_debug.py       — Retrieval-only debug CLI
 ```
@@ -191,6 +219,8 @@ python3 query_debug.py "your question here" --top-k 10
 ## Known limitations and planned improvements
 
 **Query catalogue coverage**: the structural path can only answer questions that map to one of the 11 named queries. Questions about graph relationships not yet in the catalogue fall back to vector search. Candidates for addition: `workflows_by_status`, `tools_for_workflow`, `collections_by_license_type`.
+
+**Wiki path latency**: the wiki retrieval adds a network call and embedding step for every question (via the wiki REST API). On questions where no wiki result exceeds the 0.70 similarity threshold, the context is not enriched, but the latency cost is still paid. Mitigation: run the wiki API on the same machine; typical overhead is ~300ms. A future improvement would be a fast pre-filter (e.g. detecting person or production names) before calling the wiki.
 
 **Vocabulary mismatch**: questions using acronyms ("SANE") or non-standard phrasing embed differently from documentation vocabulary. Query expansion mitigates this for the narrative path; title overrides help on the KB side.
 
