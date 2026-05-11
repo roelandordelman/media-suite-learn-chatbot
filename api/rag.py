@@ -17,6 +17,7 @@ import chromadb
 import yaml
 
 logger = logging.getLogger(__name__)
+_qlog = logging.getLogger("questions")
 
 CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
 
@@ -53,6 +54,11 @@ QUESTION: {question}
 
 INSTRUCTIONS:
 - Answer using ONLY the CONTEXT above.
+- Begin your answer by naming the source(s) you are drawing from:
+    • For [Gestructureerde data] or [Beeld & Geluid Wiki — achtergrond] blocks: start with "According to the Beeld & Geluid Wiki, …"
+    • For [Knowledge graph facts] blocks: start with "According to the Media Suite knowledge graph, …"
+    • For documentation chunks (no special tag): start with "According to the Media Suite documentation, …"
+    • If multiple sources contribute, mention each briefly: "Based on the Beeld & Geluid Wiki and the Media Suite documentation, …"
 - Knowledge graph facts (marked [Knowledge graph facts]) are authoritative for questions about Media Suite tools, collections, and workflows.
 - Structured data blocks (marked [Gestructureerde data]) are complete database query results from the Beeld & Geluid Wiki. Present these as complete lists. Do NOT summarize, select examples, or add any information that is not in the list itself.
 - Wiki background (marked [Beeld & Geluid Wiki — achtergrond]) provides context about Dutch media history persons and productions. Note that wiki content may be outdated.
@@ -377,6 +383,7 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
 
     # Bail out only if all three paths returned nothing useful
     if not sparql_context and not wiki_context and (not distances or distances[0] > max_distance):
+        _qlog.info("Q: %r | sparql:%s | wiki:%s | crag:%s | no-answer:threshold", question, bool(sparql_context), bool(wiki_context), crag_triggered)
         return {"answer": NO_ANSWER_RESPONSE, "sources": []}
 
     # Build context: SPARQL facts first, then wiki background, then chunk text
@@ -404,6 +411,7 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
 
     # Don't return sources if the LLM couldn't answer from the context
     if "I don't have information about that" in answer_text:
+        _qlog.info("Q: %r | sparql:%s | wiki:%s | crag:%s | no-answer:llm", question, bool(sparql_context), bool(wiki_context), crag_triggered)
         result = {"answer": answer_text, "sources": []}
         if debug:
             result["_debug"] = _build_debug(
@@ -424,6 +432,7 @@ def answer(question: str, history: list[dict] = None, top_k: int = TOP_K, debug:
             seen.add(r["url"])
             unique_sources.append({"title": r.get("title", ""), "url": r["url"]})
 
+    _qlog.info("Q: %r | sparql:%s | wiki:%s | crag:%s | sources:%d", question, bool(sparql_context), bool(wiki_context), crag_triggered, len(unique_sources))
     result = {"answer": answer_text, "sources": unique_sources}
     if debug:
         result["_debug"] = _build_debug(
