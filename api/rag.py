@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import logging.handlers
 from pathlib import Path
 
 import ollama
@@ -17,7 +18,23 @@ import chromadb
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# Question log — set up here so it works regardless of how rag.py is imported.
+# The 'if not handlers' guard prevents duplicate handlers on --reload.
 _qlog = logging.getLogger("questions")
+if not _qlog.handlers:
+    _log_dir = Path(__file__).parent.parent / "logs"
+    _log_dir.mkdir(exist_ok=True)
+    _q_handler = logging.handlers.RotatingFileHandler(
+        _log_dir / "questions.log",
+        maxBytes=5 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    _q_handler.setFormatter(logging.Formatter("%(asctime)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    _qlog.addHandler(_q_handler)
+    _qlog.setLevel(logging.INFO)
+    _qlog.propagate = False
 
 CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
 
