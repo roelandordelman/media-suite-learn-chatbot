@@ -371,3 +371,80 @@ questions:
       - "Researcher-triggered enrichment on demand"
       - "Aspirational"
     notes: "Alt: 'Is there a way to request enrichment for specific items that have not been processed yet?' SPARQL: all_workflows — on-demand enrichment workflow has Aspirational status."
+
+  # ── Wiki path questions ─────────────────────────────────────────────────────
+  # Tested by evaluate/eval_wiki.py which calls answer() and checks:
+  #   - key terms in the generated answer (fraction threshold)
+  #   - source attribution ("Beeld & Geluid Wiki" in answer when attribution_check: true)
+  #   - no spurious wiki attribution for documentation questions (no_attribution_check: true)
+  # Requires: wiki REST API on port 8002, Ollama running.
+
+  # --- Wiki: period questions (SPARQL path in wiki agent) ---
+
+  - question: "Who was active in Dutch media in the 1970s?"
+    category: wiki
+    attribution_check: true
+    expected_terms:
+      - "Frits Thors"
+      - "Simon Carmiggelt"
+      - "Joris Ivens"
+    notes: "Wiki SPARQL: persons_active_in_period(1970, 1979) → 1027 hits, 50 shown sorted by periodStart. These three names are all in the first 50 shown."
+
+  - question: "Who was active in Dutch television in the 1980s?"
+    category: wiki
+    attribution_check: true
+    expected_terms:
+      - "Willy Walden"
+      - "Paul Steenbergen"
+    notes: "Wiki SPARQL: persons_active_in_period(1980, 1989) → 1368 hits, 50 shown sorted by periodStart. LLM skips very early-starting entries even when their period extends into the 1980s; Willy Walden (1937–2003) and Paul Steenbergen (1938–heden) are reliably shown."
+
+  # --- Wiki: biographical questions (semantic path in wiki agent) ---
+
+  - question: "Wie was Mies Bouwman?"
+    category: wiki
+    attribution_check: true
+    expected_terms:
+      - "presentator"
+      - "Open het dorp"
+      - "1951"
+    notes: "Dutch question required — English 'Who was Mies Bouwman?' surfaces the Trivia article instead of the main article. Semantic search returns main Mies Bouwman article: jobTitle presentator, active 1951–1993, known for Open het dorp."
+
+  - question: "Who was Joris Ivens?"
+    category: wiki
+    attribution_check: true
+    expected_terms:
+      - "documentaire"
+      - "De brug"
+    notes: "Semantic search returns Joris Ivens article. Famous Dutch documentary filmmaker (1898–1989)."
+
+  - question: "Who was Frits Thors?"
+    category: wiki
+    attribution_check: true
+    expected_terms:
+      - "NTS Journaal"
+      - "omroeper"
+    notes: "Semantic search returns Frits Thors article. Dutch newsreader and broadcaster, active 1928–1979."
+
+  # --- Wiki: no spurious attribution (documentation questions) ---
+
+  - question: "How do I save items to my user project in the Media Suite?"
+    category: wiki
+    no_attribution_check: true
+    expected_terms:
+      - "bookmark"
+    notes: "Documentation question — answer should come from ChromaDB docs, not the wiki. 'Beeld & Geluid Wiki' must not appear in the answer."
+
+  # --- Wiki: pending annotation ---
+
+  - question: "Welke presentatoren waren actief in de jaren zeventig?"
+    category: wiki
+    attribution_check: true
+    expected_terms:
+      - "Aart Staartjes"
+      - "Aad Bos"
+    notes: "Wiki SPARQL: persons_by_function_and_period fires — 699 presentators found. Aart Staartjes and Aad Bos both appear near the top of the shown list."
+
+  - question: "Which productions did VPRO broadcast?"
+    category: wiki
+    annotated: false
+    notes: "broadcaster query — requires graph rebuild (beng:broadcaster triples added but Fuseki not yet reloaded). Currently falls back to semantic search only."

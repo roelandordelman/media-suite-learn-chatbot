@@ -132,9 +132,12 @@ python evaluate/eval_retrieval.py --verbose    # show retrieved vs expected URLs
 python evaluate/eval_router.py                 # structural: key-term scoring in generated answer
 python evaluate/eval_router.py --debug         # show route, SPARQL queries, context per question
 python evaluate/eval_router.py --verbose       # show full answers and missing terms on failure
+python evaluate/eval_wiki.py                   # wiki path: attribution + key-term scoring
+python evaluate/eval_wiki.py --verbose         # show full answers and missing terms on failure
+python evaluate/eval_wiki.py --debug           # show SPARQL queries selected and crag_triggered
 ```
 
-Baselines: 14/14 narrative (100%), 25–26/26 structural (routing is deterministic; ~1 failure per run is LLM non-determinism in generation, not a routing problem). Questions with `annotated: false` are shown as `[PENDING]` with the chatbot's actual output.
+Baselines: 14/14 narrative (100%), 25–26/26 structural (routing is deterministic; ~1 failure per run is LLM non-determinism in generation, not a routing problem), 7/7 wiki (100%). Questions with `annotated: false` are shown as `[PENDING]` with the chatbot's actual output.
 
 `eval_retrieval.py` skips questions with `category: structural`. `eval_router.py` only runs `category: structural` questions.
 
