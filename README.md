@@ -36,8 +36,8 @@ flowchart TD
         end
 
         subgraph WP["Wiki path"]
-            WQ[Query] -->|REST API :8002| MV
-            MV -->|top-k excerpts ≥ 0.70| W3[Wiki context]
+            WQ[Query] -->|POST /ask\nREST API :8002| WASK[wiki agent\nSPARQL + semantic]
+            WASK -->|merged context| W3[Wiki context]
         end
 
         N3 & S3 & W3 --> GEN[Generate answer\nLLM]
@@ -220,9 +220,11 @@ python3 query_debug.py "your question here" --top-k 10
 
 **Query catalogue coverage**: the structural path can only answer questions that map to one of the 11 named queries. Questions about graph relationships not yet in the catalogue fall back to vector search. Candidates for addition: `workflows_by_status`, `tools_for_workflow`, `collections_by_license_type`.
 
-**Wiki path latency**: the wiki retrieval adds a network call and embedding step for every question (via the wiki REST API). On questions where no wiki result exceeds the 0.70 similarity threshold, the context is not enriched, but the latency cost is still paid. Mitigation: run the wiki API on the same machine; typical overhead is ~300ms. A future improvement would be a fast pre-filter (e.g. detecting person or production names) before calling the wiki.
+**Wiki path latency**: the wiki `/ask` endpoint runs two internal paths — keyword-routed SPARQL (fast, deterministic) and Milvus semantic search (requires embedding). On questions where SPARQL matches but semantic search falls below 0.70, only the SPARQL result is returned, with no embedding overhead. On documentation-only questions (no SPARQL match, no semantic hit ≥ 0.70), context is not enriched but the call cost is still paid. Mitigation: run the wiki API on the same machine; typical overhead is ~300ms including the embedding step.
 
 **Vocabulary mismatch**: questions using acronyms ("SANE") or non-standard phrasing embed differently from documentation vocabulary. Query expansion mitigates this for the narrative path; title overrides help on the KB side.
+
+**Source attribution**: the LLM prompt instructs the model to open each answer with the source it drew from ("According to the Beeld & Geluid Wiki, …" / "According to the Media Suite documentation, …" / "According to the Media Suite knowledge graph, …"). This relies on the context block labels (`[Gestructureerde data]`, `[Beeld & Geluid Wiki — achtergrond]`, `[Knowledge graph facts]`) being present and the LLM following the instruction — both are LLM-dependent and may occasionally be ignored.
 
 **LLM non-determinism in generation**: routing is deterministic but the LLM occasionally omits expected terms from answers when multiple pieces of context compete (~1 failure per eval run at 50% key-term threshold). Not a routing problem.
 
