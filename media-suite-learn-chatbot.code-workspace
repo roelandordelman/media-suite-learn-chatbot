@@ -1,0 +1,18 @@
+{
+  "folders": [
+    { "name": "🤖 learn-chatbot", "path": "../media-suite-learn-chatbot" }
+  ],
+  "settings": {
+    "claudeCode.initialPermissionMode": "plan",
+    "window.title": "🤖 learn-chatbot — ${activeEditorShort}",
+    "workbench.colorTheme": "Default Light Modern",
+    "workbench.colorCustomizations": {
+      "titleBar.activeBackground": "#1a3a5c",
+      "titleBar.activeForeground": "#ffffff",
+      "activityBar.background": "#1a3a5c",
+      "terminal.background": "#000000",
+      "terminal.foreground": "#00ff00",
+      "terminalCursor.foreground": "#00ff00"
+    }
+  }
+}

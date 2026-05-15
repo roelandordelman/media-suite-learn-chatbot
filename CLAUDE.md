@@ -159,3 +159,7 @@ python query_debug.py "your question here" --top-k 10
 - Keep the widget embeddable via a single `<script>` tag with a `data-api-url` attribute.
 - Every SPARQL query must include `FROM <https://mediasuite.clariah.nl/graph>` — data is not in the default graph.
 - The wiki path is optional infrastructure — code must handle its absence gracefully.
+
+## Roadmap
+The shared project roadmap is at `../mediasuite-knowledge-base/docs/roadmap.md`.
+Before starting significant work, check current priorities there.
